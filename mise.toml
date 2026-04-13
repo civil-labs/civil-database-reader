@@ -1,0 +1,5 @@
+[tools]
+go = "1.26.1"
+
+[tasks.update-api]
+run = "GOPROXY=direct go get github.com/civil-labs/civil-api-go@latest"
