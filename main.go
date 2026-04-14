@@ -191,7 +191,10 @@ func BuildPoolConfig(env *Config) (*pgxpool.Config, error) {
 	config.ConnConfig.User = env.DatabaseUsername
 	config.ConnConfig.Password = env.DatabasePassword
 	config.ConnConfig.Database = env.DatabaseName
+
+	// Hardcoded constraints required by the intended civil architecture
 	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+	config.ConnConfig.TLSConfig = nil
 
 	// Hardcode the constraints required by your architecture
 	// This prevents misconfiguration via environment variables
