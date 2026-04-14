@@ -61,7 +61,7 @@ func getEnv(key string, fallback string) string {
 	return fallback
 }
 
-func getPortEnv(key string, fallback uint16, logger *slog.Logger) (uint16) {
+func getPortEnv(key string, fallback uint16, logger *slog.Logger) uint16 {
 	if value, exists := os.LookupEnv(key); exists {
 		var intValue, err = strconv.ParseUint(value, 10, 16)
 

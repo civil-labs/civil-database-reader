@@ -16,6 +16,9 @@ RUN adduser -D -u 1001 readeruser
 # Copy in the binary
 COPY --from=builder --chown=readeruser:readeruser /app/reader /app/reader
 
+RUN wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.19/grpc_health_probe-linux-amd64 && \
+    chmod +x /bin/grpc_health_probe
+
 # Switch to the non-root user
 USER 1001
 

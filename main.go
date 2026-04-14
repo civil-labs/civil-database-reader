@@ -2,18 +2,21 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	//"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 )
 
@@ -139,6 +142,11 @@ func main() {
 	grpcServer := grpc.NewServer()
 	srv := &server{db: dbPool}
 
+	healthServer := health.NewServer()
+
+	// 3. Register the Health Server with the main gRPC Server
+	healthpb.RegisterHealthServer(grpcServer, healthServer)
+
 	// Normally you call the generated protobuf registration function here
 	RegisterSpatialServiceServer(grpcServer, srv)
 
@@ -183,12 +191,12 @@ func BuildPoolConfig(env *Config) (*pgxpool.Config, error) {
 	config.ConnConfig.User = env.DatabaseUsername
 	config.ConnConfig.Password = env.DatabasePassword
 	config.ConnConfig.Database = env.DatabaseName
+	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
 
 	// Hardcode the constraints required by your architecture
 	// This prevents misconfiguration via environment variables
 	config.ConnConfig.RuntimeParams = map[string]string{
-		"default_query_exec_mode": "exec",    // Mandatory for pgBouncer
-		"sslmode":                 "disable", // Proxy handles TLS
+		"sslmode": "disable", // Proxy handles TLS
 	}
 
 	return config, nil
