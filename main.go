@@ -110,12 +110,17 @@ func main() {
 		logger.Error("Failed to load config", slog.Any("error", err))
 		os.Exit(1)
 	}
+
+	logger.Info("service initialized",
+		slog.Int("grpc_port", config.GrpcPort),
+		slog.Bool("verbose", config.verbose)
+	)
 	
 	dbPoolConfig = BuildPoolConfig(config)
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, dbPoolConfig)
 	if err != nil {
-		slog.Error("Failed to initialize database pool: %v", err)
+		slog.Error("failed to initialize database pool", slog.Any("error", err))
 		os.Exit(1)
 	}
 	defer dbPool.Close()
@@ -124,12 +129,12 @@ func main() {
 	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, 2*time.Second)
 	defer cancelTimeout()
 	if err := dbPool.Ping(ctxTimeout); err != nil {
-		slog.Warning("Could not ping database: %v", err)
+		logger.Warning("could not ping database", slog.Any("error", err))
 	} else {
-		log.Println("Connected to PostgreSQL/PostGIS.")
+		logger.Info("ping test to PostgreSQL/PostGIS succeeded")
 	}
 
-	// 2. Initialize the gRPC Server and Handler
+	// Initialize the gRPC Server and Handler
 	grpcServer := grpc.NewServer()
 	srv := &server{db: dbPool}
 
@@ -139,14 +144,15 @@ func main() {
 	// Enable reflection so tools like grpcurl or Postman can interact with it easily
 	// reflection.Register(grpcServer)
 
-	// 3. Setup Networking
-	listener, err := net.Listen("tcp", ":8080")
+	// Setup Networking
+	var listenPort = fmt.Sprintf(":%d", config.GrpcPort)
+	listener, err := net.Listen("tcp", listenPort)
 	if err != nil {
-		slog.Error("Failed to listen on port database pool: %v", err)
+		logger.Error("failed to listen on grpc port", slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	// 4. Graceful Shutdown
+	// Graceful Shutdown
 	go func() {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -156,10 +162,10 @@ func main() {
 		cancel()
 	}()
 
-	// 5. Start Serving
-	log.Println("Starting spatial microservice on :8080")
+	// Start Serving
+	logger.Info("starting server", slog.Int("port", config.GrpcPort))
 	if err := grpcServer.Serve(listener); err != nil {
-		log.Fatalf("gRPC server terminated with error: %v", err)
+		logger.Error("gRPC server terminated with error", slog.Any("error", err))
 	}
 }
 

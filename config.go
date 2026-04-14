@@ -98,7 +98,7 @@ func getVerboseEnv() bool {
 		boolValue, err := strconv.ParseBool(value)
 
 		if err != nil {
-			logger.Warn("Failure in parsing CIVIL_VERBOSE. Falling back to default", slog.Any("error", err), slog.String("applied_default", false))
+			logger.Warn("Failure in parsing CIVIL_VERBOSE. Falling back to default", slog.Any("error", err), slog.Bool("applied_default", false))
 			return false
 		}
 
