@@ -2,17 +2,18 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
+	//"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 )
 
@@ -81,7 +82,7 @@ func (s *server) GetLocation(ctx context.Context, req *GetLocationRequest) (*Get
 		if err.Error() == "no rows in result set" {
 			return nil, status.Errorf(codes.NotFound, "location with id %s not found", req.Id)
 		}
-		log.Printf("DB error querying location %s: %v", req.Id, err)
+		//log.Printf("DB error querying location %s: %v", req.Id, err)
 		return nil, status.Error(codes.Internal, "failed to retrieve location")
 	}
 
@@ -104,7 +105,7 @@ func main() {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	config, err = LoadConfig(logger)
+	var config, err = LoadConfig(logger)
 
 	if err != nil {
 		logger.Error("Failed to load config", slog.Any("error", err))
@@ -112,11 +113,11 @@ func main() {
 	}
 
 	logger.Info("service initialized",
-		slog.Int("grpc_port", config.GrpcPort),
-		slog.Bool("verbose", config.verbose),
+		slog.Int("grpc_port", int(config.GrpcPort)),
+		slog.Bool("verbose", config.Verbose),
 	)
 
-	dbPoolConfig = BuildPoolConfig(config)
+	dbPoolConfig, err := BuildPoolConfig(config)
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, dbPoolConfig)
 	if err != nil {
@@ -129,7 +130,7 @@ func main() {
 	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, 2*time.Second)
 	defer cancelTimeout()
 	if err := dbPool.Ping(ctxTimeout); err != nil {
-		logger.Warning("could not ping database", slog.Any("error", err))
+		logger.Warn("could not ping database", slog.Any("error", err))
 	} else {
 		logger.Info("ping test to PostgreSQL/PostGIS succeeded")
 	}
@@ -157,19 +158,19 @@ func main() {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 		<-quit
-		log.Println("Received shutdown signal. Stopping gRPC server gracefully...")
+		logger.Info("Received shutdown signal. Stopping gRPC server gracefully...")
 		grpcServer.GracefulStop()
 		cancel()
 	}()
 
 	// Start Serving
-	logger.Info("starting server", slog.Int("port", config.GrpcPort))
+	logger.Info("starting server", slog.Int("port", int(config.GrpcPort)))
 	if err := grpcServer.Serve(listener); err != nil {
 		logger.Error("gRPC server terminated with error", slog.Any("error", err))
 	}
 }
 
-func BuildPoolConfig(env Config) (*pgxpool.Config, error) {
+func BuildPoolConfig(env *Config) (*pgxpool.Config, error) {
 	// Start with an empty/default config
 	config, err := pgxpool.ParseConfig("")
 	if err != nil {
