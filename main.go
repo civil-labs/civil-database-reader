@@ -113,9 +113,9 @@ func main() {
 
 	logger.Info("service initialized",
 		slog.Int("grpc_port", config.GrpcPort),
-		slog.Bool("verbose", config.verbose)
+		slog.Bool("verbose", config.verbose),
 	)
-	
+
 	dbPoolConfig = BuildPoolConfig(config)
 
 	dbPool, err := pgxpool.NewWithConfig(ctx, dbPoolConfig)
@@ -169,7 +169,7 @@ func main() {
 	}
 }
 
-func BuildPoolConfig(env Config) (*pgxpool.Config, error) {	
+func BuildPoolConfig(env Config) (*pgxpool.Config, error) {
 	// Start with an empty/default config
 	config, err := pgxpool.ParseConfig("")
 	if err != nil {
@@ -186,7 +186,7 @@ func BuildPoolConfig(env Config) (*pgxpool.Config, error) {
 	// Hardcode the constraints required by your architecture
 	// This prevents misconfiguration via environment variables
 	config.ConnConfig.RuntimeParams = map[string]string{
-		"default_query_exec_mode": "exec", // Mandatory for pgBouncer
+		"default_query_exec_mode": "exec",    // Mandatory for pgBouncer
 		"sslmode":                 "disable", // Proxy handles TLS
 	}
 

@@ -80,14 +80,14 @@ func getIntEnv(key string, fallback uint16) (uint16, error) {
 		if err != nil {
 			if fallback == nil {
 				return nil, fmt.Errorf("Failure in parsing integer: %w", err)
-			}else{
+			} else {
 				logger.Warn("Failure in parsing integer. Falling back to default", slog.Any("error", err), slog.Int("applied_default", fallback))
 				return false
 			}
 		}
-		
+
 		return intValue
-	}else{
+	} else {
 		return fallback
 	}
 
