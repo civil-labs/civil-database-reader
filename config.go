@@ -11,7 +11,7 @@ import (
 // Config holds all the runtime configuration
 type Config struct {
 	Verbose          bool
-	GrpcPort         uint16
+	Port             uint16
 	DatabaseHost     string
 	DatabasePort     uint16
 	DatabaseUsername string
@@ -22,6 +22,7 @@ type Config struct {
 func LoadConfig(logger *slog.Logger) (*Config, error) {
 	// Define the list of required environment variables
 	required := []string{
+		"CIVIL_DB_HOST",
 		"CIVIL_DB_USER",
 		"CIVIL_DB_PASS",
 		"CIVIL_DB_NAME",
@@ -44,7 +45,7 @@ func LoadConfig(logger *slog.Logger) (*Config, error) {
 	// You can also set defaults here for optional vars (like Port)
 	return &Config{
 		Verbose:          getVerboseEnv(logger),
-		GrpcPort:         getPortEnv("CIVIL_GRPC_PORT", 50051, logger),
+		Port:             getPortEnv("CIVIL_PORT", 50051, logger),
 		DatabaseHost:     os.Getenv("CIVIL_DB_HOST"),
 		DatabasePort:     getPortEnv("CIVIL_DB_PORT", 5432, logger),
 		DatabaseUsername: os.Getenv("CIVIL_DB_USER"),
