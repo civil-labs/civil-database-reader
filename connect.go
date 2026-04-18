@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"connectrpc.com/connect"
 	parcelsv1 "github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1"
@@ -13,13 +14,16 @@ import (
 )
 
 type ParcelServer struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	logger *slog.Logger
 }
 
 func (s *ParcelServer) GetParcelAttribute(
 	ctx context.Context,
 	req *connect.Request[parcelsv1.GetParcelAttributeRequest],
 ) (*connect.Response[parcelsv1.GetParcelAttributeResponse], error) {
+
+	s.logger.Debug("received GetParcelAttribute request")
 
 	if req.Msg.ParcelId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("parcel ID is required"))

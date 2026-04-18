@@ -55,13 +55,16 @@ func main() {
 	}
 
 	// Initialize the handlers and http server
-	srv := &ParcelServer{db: dbPool}
+	srv := &ParcelServer{
+		db:     dbPool,
+		logger: logger,
+	}
 	mux := http.NewServeMux()
 
 	path, handler := parcelsv1connect.NewParcelsServiceHandler(srv)
 	mux.Handle(path, handler)
 
-	// Pass the fully qualified name of your service so the health check
+	// Pass the fully qualified name of the service so the health check
 	// can report on this specific service, as well as the global server status.
 	checker := grpchealth.NewStaticChecker(
 		parcelsv1connect.ParcelsServiceName,
@@ -100,13 +103,13 @@ func main() {
 	// Block main() until something happens
 	select {
 	case err := <-serverErr:
-		// The server crashed prematurely!
+		// The server crashed prematurely
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server crashed", slog.Any("error", err))
 			exitCode = 1
 		}
 	case sig := <-shutdownSig:
-		// ECS sent a graceful shutdown signal!
+		// Graceful shutdown signal received
 		logger.Info("received shutdown signal", slog.String("signal", sig.String()))
 
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)

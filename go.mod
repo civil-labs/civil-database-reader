@@ -7,7 +7,6 @@ require (
 	connectrpc.com/grpchealth v1.4.0
 	github.com/civil-labs/civil-api-go v0.0.0-20260418110725-98aca922546f
 	github.com/jackc/pgx/v5 v5.9.1
-	golang.org/x/net v0.53.0
 )
 
 require (
