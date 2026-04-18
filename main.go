@@ -19,9 +19,9 @@ import (
 )
 
 func main() {
-	// Create context, logger, config, and db pool first
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create app context, logger, config, and db pool first
+	ctxApp, cancelApp := context.WithCancel(context.Background())
+	defer cancelApp()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
@@ -39,15 +39,14 @@ func main() {
 
 	dbPoolConfig, err := BuildPoolConfig(config)
 
-	dbPool, err := pgxpool.NewWithConfig(ctx, dbPoolConfig)
+	dbPool, err := pgxpool.NewWithConfig(ctxApp, dbPoolConfig)
 	if err != nil {
 		slog.Error("failed to initialize database pool", slog.Any("error", err))
 		os.Exit(1)
 	}
-	defer dbPool.Close()
 
 	// Quick connection test
-	ctxTimeout, cancelTimeout := context.WithTimeout(ctx, 2*time.Second)
+	ctxTimeout, cancelTimeout := context.WithTimeout(ctxApp, 2*time.Second)
 	defer cancelTimeout()
 	if err := dbPool.Ping(ctxTimeout); err != nil {
 		logger.Warn("could not ping database", slog.Any("error", err))
@@ -77,7 +76,6 @@ func main() {
 	p := new(http.Protocols)
 	p.SetHTTP1(true)
 
-	// Use h2c so we can serve HTTP/2 without TLS.
 	p.SetUnencryptedHTTP2(true)
 	httpSrv := http.Server{
 		Addr:      listenPort,
@@ -85,42 +83,48 @@ func main() {
 		Protocols: p,
 	}
 
-	// Graceful Shutdown
+	shutdownSig := make(chan os.Signal, 1)
+	signal.Notify(shutdownSig, os.Interrupt, syscall.SIGTERM)
+
+	serverErr := make(chan error, 1)
+
+	// Start the HTTP server in a background goroutine
 	go func() {
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-		<-quit // Block until a signal is received
+		logger.Info("starting connect server", slog.Int("port", int(config.Port)))
+		serverErr <- httpSrv.ListenAndServe()
+	}()
 
-		logger.Info("received shutdown signal. stopping ConnectRPC server gracefully...")
+	// This is inited by default to go's int zero value, zero
+	var exitCode int
 
-		// Create a timeout context. If active requests take longer than 15 seconds
-		// to finish, forcefully drop them so the container can be killed
+	// Block main() until something happens
+	select {
+	case err := <-serverErr:
+		// The server crashed prematurely!
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server crashed", slog.Any("error", err))
+			exitCode = 1
+		}
+	case sig := <-shutdownSig:
+		// ECS sent a graceful shutdown signal!
+		logger.Info("received shutdown signal", slog.String("signal", sig.String()))
+
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer shutdownCancel()
 
-		// Trigger the HTTP shutdown
 		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("server shutdown failed or timed out", slog.Any("error", err))
+			logger.Error("HTTP graceful shutdown failed", slog.Any("error", err))
+			exitCode = 1
 		}
-
-		// Closes the database pool or other resources
-		// only after the server has stopped accepting/processing requests.
-		logger.Info("closing database connections...")
-		dbPool.Close()
-
-		// cancel() // If a global context cancel is added, invoke it here
-	}()
-
-	// Start Serving
-	logger.Info("starting connect server", slog.Int("port", int(config.Port)))
-
-	err = httpSrv.ListenAndServe()
-
-	// Catch the exit. Ignore ErrServerClosed, as that means the graceful shutdown worked
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("Server crashed", slog.Any("error", err))
-		os.Exit(1)
 	}
 
-	logger.Info("graceful shutdown complete. exiting")
+	// This block runs no matter how the select statement unblocked.
+	slog.Info("stopping background workers...")
+	cancelApp()
+
+	slog.Info("closing database connections...")
+	dbPool.Close()
+
+	slog.Info("teardown complete. exiting.")
+	os.Exit(exitCode)
 }
