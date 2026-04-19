@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"connectrpc.com/connect"
 	parcelsv1 "github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1"
@@ -33,7 +34,11 @@ func (s *ParcelServer) GetParcelAttribute(
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("attribute name is required"))
 	}
 
-	safeColumn := pgx.Identifier{req.Msg.GetAttributeName()}.Sanitize()
+	// Strip hidden newlines/spaces and force lowercase so sanitize result will matche Postgres's default behavior
+	cleanAttr := strings.TrimSpace(req.Msg.GetAttributeName())
+	cleanAttr = strings.ToLower(cleanAttr)
+
+	safeColumn := pgx.Identifier{cleanAttr}.Sanitize()
 
 	// Safely inject the sanitized identifier into the query string
 	query := fmt.Sprintf(`SELECT %s::text FROM parcels WHERE id = $1`, safeColumn)

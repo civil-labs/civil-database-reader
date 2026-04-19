@@ -23,7 +23,11 @@ func main() {
 	ctxApp, cancelApp := context.WithCancel(context.Background())
 	defer cancelApp()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug, // Show debug logs!
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, opts))
 
 	config, err := LoadConfig(logger)
 
