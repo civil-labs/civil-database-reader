@@ -41,7 +41,7 @@ func (s *ParcelServer) GetParcelAttribute(
 	safeColumn := pgx.Identifier{cleanAttr}.Sanitize()
 
 	// Safely inject the sanitized identifier into the query string
-	query := fmt.Sprintf(`SELECT %s::text FROM parcels WHERE id = $1`, safeColumn)
+	query := fmt.Sprintf(`SELECT %s::text FROM parcels WHERE parcel_id = $1`, safeColumn)
 
 	s.logger.Debug("executing database query", slog.String("query", query))
 
