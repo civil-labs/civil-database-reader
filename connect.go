@@ -25,21 +25,23 @@ func (s *ParcelServer) GetParcelAttribute(
 
 	s.logger.Debug("received GetParcelAttribute request")
 
-	if req.Msg.ParcelId == "" {
+	if req.Msg.GetParcelId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("parcel ID is required"))
 	}
 
-	if req.Msg.AttributeName == "" {
+	if req.Msg.GetAttributeName() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("attribute name is required"))
 	}
 
-	safeColumn := pgx.Identifier{req.Msg.AttributeName}.Sanitize()
+	safeColumn := pgx.Identifier{req.Msg.GetAttributeName()}.Sanitize()
 
 	// Safely inject the sanitized identifier into the query string
 	query := fmt.Sprintf(`SELECT %s::text FROM parcels WHERE id = $1`, safeColumn)
 
+	s.logger.Debug("executing database query", slog.String("query", query))
+
 	var value *string
-	err := s.db.QueryRow(ctx, query, req.Msg.ParcelId).Scan(&value)
+	err := s.db.QueryRow(ctx, query, req.Msg.GetParcelId()).Scan(&value)
 	if err != nil {
 		// Gracefully handle the "column does not exist" error
 
