@@ -42,6 +42,9 @@ func (s *ParcelServer) GetParcelAttribute(
 	err := s.db.QueryRow(ctx, query, req.Msg.ParcelId).Scan(&value)
 	if err != nil {
 		// Gracefully handle the "column does not exist" error
+
+		s.logger.Debug("GetParcelAttribute query failed", slog.Any("error", err))
+
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "42703" { // 42703 is the Postgres code for undefined_column
 			msg := fmt.Sprintf("attribute %s does not exist", req.Msg.AttributeName)
