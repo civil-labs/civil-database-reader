@@ -106,3 +106,37 @@ func (s *ParcelServer) GetParcelProperty(
 	}
 	return connect.NewResponse(res), nil
 }
+
+func (s *ParcelServer) GetParcel(
+	ctx context.Context,
+	req *connect.Request[parcelsv1.GetParcelRequest],
+) (*connect.Response[parcelsv1.GetParcelResponse], error) {
+
+	if req.Msg.ParcelId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("parcel ID is required"))
+	}
+
+	query := `SELECT * FROM parcels WHERE id = $1`
+
+	// Execute Query
+	var value *string // Use a pointer to handle nulls if the key doesn't exist in the JSON
+	err := s.db.QueryRow(ctx, query, req.Msg.ParcelId).Scan(&value)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("parcel not found"))
+		}
+		return nil, connect.NewError(connect.CodeInternal, errors.New("database error"))
+	}
+
+	if value == nil {
+		msg := fmt.Sprintf("parcel %s not found", req.Msg.ParcelId)
+		return nil, connect.NewError(connect.CodeNotFound, errors.New(msg))
+	}
+
+	res := &parcelsv1.GetParcelResponse{
+		PropertyValue: *value,
+	}
+
+	return connect.NewResponse(res), nil
+}
