@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	parcelsv1 "github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/proto"
 )
 
 type ParcelServer struct {
@@ -24,7 +25,6 @@ func (s *ParcelServer) GetParcelsById(
 	parcels := make(map[string]*parcelsv1.Parcel, 3)
 
 	neighborhood := "dcf2972a-2278-4be0-a756-22d1a48e7171"
-	marketArea := "1e481f56-d464-408e-8ef9-63dd58b29eff"
 	far := 0.5
 	minLotSize := 5000.0
 	maxHeight := 20.0
@@ -34,21 +34,20 @@ func (s *ParcelServer) GetParcelsById(
 	yearBuilt := int32(1963)
 
 	parcels["77f0f90d-2b30-4b84-a63b-01354d64179e"] = &parcelsv1.Parcel{
-		ParcelId:                 "77f0f90d-2b30-4b84-a63b-01354d64179e",
-		Address:                  "123 Prophet Way, San Francisco, CA, 94102",
-		AddressId:                "3d63f781-f551-4a44-b396-078dd6a69230",
-		OwnerName:                "Henry George",
-		OwnerAddress:             "413 S. 10th Street, Philadelphia, PA, 19147",
-		OwnerId:                  "dcf2972a-2278-4be0-a756-22d1a48e7171",
-		LandAreaSqFt:             42341.123,
-		LandUseId:                "Residential Single-Family",
-		NeighborhoodId:           &neighborhood,
-		MarketAreaId:             &marketArea,
-		ZoningIds:                []string{"edfb09ed-7dd3-4c43-8e62-057132676c28", "aa9fc8f4-c646-41df-ba3b-5ffd673ad60a"},
-		MarketLandValue:          "1132234.92",
-		AssessedLandValue:        "9032234.92",
-		MarketImprovementValue:   "450000",
-		AssessedImprovementValue: "450000",
+		ParcelId:          "77f0f90d-2b30-4b84-a63b-01354d64179e",
+		Address:           "123 Prophet Way, San Francisco, CA, 94102",
+		AddressId:         "3d63f781-f551-4a44-b396-078dd6a69230",
+		OwnerName:         "Henry George",
+		OwnerAddress:      "413 S. 10th Street, Philadelphia, PA, 19147",
+		OwnerId:           "dcf2972a-2278-4be0-a756-22d1a48e7171",
+		LandAreaSqFt:      proto.Float64(42341.123),
+		FrontageM:         proto.Float64(4323.1),
+		DepthM:            proto.Float64(24.1),
+		LandUseId:         "Residential Single-Family",
+		NeighborhoodId:    &neighborhood,
+		ZoningIds:         []string{"edfb09ed-7dd3-4c43-8e62-057132676c28", "aa9fc8f4-c646-41df-ba3b-5ffd673ad60a"},
+		MarketLandValue:   proto.String("1132234.92"),
+		AssessedLandValue: proto.String("9032234.92"),
 
 		Affordances: &parcelsv1.ParcelAffordances{
 			AffordanceIds:  []string{"69faa787-88e8-4b61-a67d-e23e82e903df", "e6a204ed-fa96-4456-83f7-0a809f5362f8"},
@@ -58,12 +57,17 @@ func (s *ParcelServer) GetParcelsById(
 		},
 
 		ImprovementSummary: &parcelsv1.ParcelImprovementsSummary{
-			ImprovementIds:  []string{"6a4aaaea-f96e-430b-a646-963a88856e25", "f349b4b1-c7e3-4a88-96e0-e8fb297384ed"},
-			TotalAreaSqFt:   &totalArea,
-			TotalBathrooms:  &bath,
-			TotalBedrooms:   &bed,
-			OldestYearBuilt: &yearBuilt,
-			NewestYearBuilt: &yearBuilt,
+			ImprovementIds:           []string{"6a4aaaea-f96e-430b-a646-963a88856e25", "f349b4b1-c7e3-4a88-96e0-e8fb297384ed"},
+			TotalAreaSqFt:            totalArea,
+			TotalBathrooms:           bath,
+			TotalBedrooms:            bed,
+			TotalUnits:               1,
+			OldestYearBuilt:          &yearBuilt,
+			NewestYearBuilt:          &yearBuilt,
+			WorstConditionId:         nil,
+			BestConditionId:          nil,
+			MarketImprovementValue:   proto.String("450000"),
+			AssessedImprovementValue: proto.String("450000"),
 		},
 
 		Properties: "",
