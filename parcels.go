@@ -20,9 +20,9 @@ func (s *ParcelServer) GetParcelsById(
 	req *connect.Request[parcelsv1.GetParcelsByIdRequest],
 ) (*connect.Response[parcelsv1.GetParcelsByIdResponse], error) {
 
-	s.logger.Debug("received GetParcelsById request")
+	s.logger.Debug("received GetParcelsById request", slog.Any("parcelIds", req.Msg.ParcelIds))
 
-	parcelIds := req.Msg.GetParcelIds()
+	parcelIds := req.Msg.ParcelIds
 
 	// Empty arrays are blocked by the connect handler via the proto def
 
