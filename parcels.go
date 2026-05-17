@@ -127,21 +127,30 @@ func (s *ParcelServer) GetParcelsById(
 
 		s.logger.Debug("converted units")
 
+		affordances := &parcelsv1.ParcelAffordances{
+			AffordanceIds: []string{}, // Guarantees a non-nil slice (JSON "[]")
+		}
+
+		improvementSummary := &parcelsv1.ParcelImprovementsSummary{
+			ImprovementIds: []string{}, // Guarantees a non-nil slice
+		}
+
 		// 4. Populate the Protobuf map
 		// Assuming your proto generates pointers (*string, *float64) for optional fields
 		parcels[parcelID] = &parcelsv1.Parcel{
-			ParcelId:     parcelID,
-			Address:      address,
-			AddressId:    addressID,
-			OwnerName:    ownerName,
-			OwnerAddress: ownerAddress,
-			OwnerId:      ownerID,
-			LandAreaSqFt: landAreaSqFt,
-			FrontageFt:   frontageFt,
-			DepthFt:      depthFt,
-			LandUseId:    landUseID,
-			// If properties is defined as an optional string in proto:
-			Properties: properties,
+			ParcelId:           parcelID,
+			Address:            address,
+			AddressId:          addressID,
+			OwnerName:          ownerName,
+			OwnerAddress:       ownerAddress,
+			OwnerId:            ownerID,
+			LandAreaSqFt:       landAreaSqFt,
+			FrontageFt:         frontageFt,
+			DepthFt:            depthFt,
+			LandUseId:          landUseID,
+			Affordances:        affordances,
+			ImprovementSummary: improvementSummary,
+			Properties:         properties,
 		}
 
 		s.logger.Debug("populated protobuf map")
