@@ -24,6 +24,14 @@ func (s *ParcelServer) GetParcelsById(
 
 	parcelIds := req.Msg.ParcelIds
 
+	var neighborhoodDefIDArg *string
+
+	// If the string is NOT empty, we take its memory address (&)
+	// to create a pointer to the string.
+	if defID := req.Msg.GetNeighborhoodDefinitionId(); defID != "" {
+		neighborhoodDefIDArg = &defID
+	}
+
 	// Empty arrays are blocked by the connect handler via the proto def
 
 	s.logger.Debug("creating GetParcelsById map")
@@ -67,7 +75,7 @@ func (s *ParcelServer) GetParcelsById(
 		WHERE p.public_id = ANY($1::uuid[])
 	`
 
-	rows, err := s.db.Query(ctx, query, parcelIds)
+	rows, err := s.db.Query(ctx, query, parcelIds, neighborhoodDefIDArg)
 
 	s.logger.Debug("performed GetParcelsById query")
 
