@@ -26,11 +26,11 @@ func (s *ParcelServer) GetParcelsById(
 
 	// Empty arrays are blocked by the connect handler via the proto def
 
-	slog.Debug("creating GetParcelsById map")
+	s.logger.Debug("creating GetParcelsById map")
 
 	parcels := make(map[string]*parcelsv1.Parcel, len(parcelIds))
 
-	slog.Debug("building GetParcelsById query")
+	s.logger.Debug("building GetParcelsById query")
 
 	query := `
 		SELECT 
@@ -59,7 +59,7 @@ func (s *ParcelServer) GetParcelsById(
 
 	rows, err := s.db.Query(ctx, query, parcelIds)
 
-	slog.Debug("performed GetParcelsById query")
+	s.logger.Debug("performed GetParcelsById query")
 
 	if err != nil {
 		s.logger.Error("failed to query parcels", slog.Any("error", err))
@@ -68,7 +68,7 @@ func (s *ParcelServer) GetParcelsById(
 	defer rows.Close()
 
 	for rows.Next() {
-		slog.Debug("scanning row")
+		s.logger.Debug("scanning row")
 
 		// 1. Declare pointers for optional fields
 		var (
