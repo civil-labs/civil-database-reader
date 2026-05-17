@@ -26,7 +26,11 @@ func (s *ParcelServer) GetParcelsById(
 
 	// Empty arrays are blocked by the connect handler via the proto def
 
-	parcels := make(map[string]*parcelsv1.Parcel, 3)
+	slog.Debug("creating GetParcelsById map")
+
+	parcels := make(map[string]*parcelsv1.Parcel, len(parcelIds))
+
+	slog.Debug("building GetParcelsById query")
 
 	query := `
 		SELECT 
