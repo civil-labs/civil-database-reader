@@ -191,7 +191,7 @@ func (s *ParcelServer) GetParcelsById(
 
 		s.logger.Debug("converted units")
 
-		// If nothing was found, instantiate empty slices
+		// If nothing was found, initialize empty slices
 		if zoningIDs == nil {
 			zoningIDs = []string{}
 		}
@@ -200,14 +200,14 @@ func (s *ParcelServer) GetParcelsById(
 		}
 
 		affordances := &parcelsv1.ParcelAffordances{
-			AffordanceIds:  zoningIDs, // Guarantees a non-nil slice (JSON "[]")
+			AffordanceIds:  affordanceIDs,
 			MaxFar:         maxFar,
 			MinLotSizeSqFt: minLotSizeSqFt,
 			MaxHeightFt:    maxHeightFt,
 		}
 
 		improvementSummary := &parcelsv1.ParcelImprovementsSummary{
-			ImprovementIds: affordanceIDs, // Guarantees a non-nil slice
+			ImprovementIds: []string{}, // Guarantees a non-nil slice
 		}
 
 		// 4. Populate the Protobuf map
@@ -224,6 +224,7 @@ func (s *ParcelServer) GetParcelsById(
 			LandAreaSqFt:       landAreaSqFt,
 			FrontageFt:         frontageFt,
 			DepthFt:            depthFt,
+			ZoningIds:          zoningIDs,
 			Affordances:        affordances,
 			ImprovementSummary: improvementSummary,
 			Properties:         properties,
