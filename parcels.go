@@ -44,6 +44,7 @@ func (s *ParcelServer) GetParcelsById(
 			pa.frontage_m,
 			pa.depth_m,
 			lu.land_use_id,
+			n.public_id::text,
 			pa.properties::text
 		FROM parcels p
 		LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
@@ -54,6 +55,15 @@ func (s *ParcelServer) GetParcelsById(
 		LEFT JOIN addresses oad ON oa.address_id = oad.address_id
 		LEFT JOIN address_attributes oada ON oad.address_id = oada.address_id
 		LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
+
+		LEFT JOIN neighborhood_definitions nd 
+            ON nd.public_id = $2::uuid
+        LEFT JOIN parcel_neighborhood_definitions pnd 
+            ON p.parcel_id = pnd.parcel_id 
+            AND pnd.neighborhood_definition_id = nd.neighborhood_definition_id
+        LEFT JOIN neighborhoods n 
+            ON pnd.neighborhood_id = n.neighborhood_id
+
 		WHERE p.public_id = ANY($1::uuid[])
 	`
 
@@ -72,17 +82,18 @@ func (s *ParcelServer) GetParcelsById(
 
 		// 1. Declare pointers for optional fields
 		var (
-			parcelID     string
-			address      *string
-			addressID    *string
-			ownerName    *string
-			ownerAddress *string
-			ownerID      *string
-			landAreaSqM  *float64
-			frontageM    *float64
-			depthM       *float64
-			landUseID    *string
-			properties   *string
+			parcelID       string
+			address        *string
+			addressID      *string
+			ownerName      *string
+			ownerAddress   *string
+			ownerID        *string
+			landAreaSqM    *float64
+			frontageM      *float64
+			depthM         *float64
+			landUseID      *string
+			neighborhoodID *string
+			properties     *string
 		)
 
 		// 2. Scan directly into the pointers
@@ -97,6 +108,7 @@ func (s *ParcelServer) GetParcelsById(
 			&frontageM,
 			&depthM,
 			&landUseID,
+			&neighborhoodID,
 			&properties,
 		)
 
@@ -144,10 +156,11 @@ func (s *ParcelServer) GetParcelsById(
 			OwnerName:          ownerName,
 			OwnerAddress:       ownerAddress,
 			OwnerId:            ownerID,
+			LandUseId:          landUseID,
+			NeighborhoodId:     neighborhoodID,
 			LandAreaSqFt:       landAreaSqFt,
 			FrontageFt:         frontageFt,
 			DepthFt:            depthFt,
-			LandUseId:          landUseID,
 			Affordances:        affordances,
 			ImprovementSummary: improvementSummary,
 			Properties:         properties,
@@ -171,90 +184,6 @@ func (s *ParcelServer) GetParcelsById(
 	s.logger.Debug("sending response")
 
 	return connect.NewResponse(res), nil
-
-	// rows, err := s.db.Query(ctx, query, parcelIds)
-
-	// parcels["77f0f90d-2b30-4b84-a63b-01354d64179e"] = &parcelsv1.Parcel{
-	// 	ParcelId:          "77f0f90d-2b30-4b84-a63b-01354d64179e",
-	// 	Address:           "123 Prophet Way, San Francisco, CA, 94102",
-	// 	AddressId:         "3d63f781-f551-4a44-b396-078dd6a69230",
-	// 	OwnerName:         "Henry George",
-	// 	OwnerAddress:      "413 S. 10th Street, Philadelphia, PA, 19147",
-	// 	OwnerId:           proto.String("dcf2972a-2278-4be0-a756-22d1a48e7171"),
-	// 	LandAreaSqFt:      proto.Float64(42341.123),
-	// 	FrontageM:         proto.Float64(4323.1),
-	// 	DepthM:            proto.Float64(24.1),
-	// 	LandUseId:         "Residential Single-Family",
-	// 	NeighborhoodId:    &neighborhood,
-	// 	ZoningIds:         []string{"edfb09ed-7dd3-4c43-8e62-057132676c28", "aa9fc8f4-c646-41df-ba3b-5ffd673ad60a"},
-	// 	MarketLandValue:   proto.String("1132234.92"),
-	// 	AssessedLandValue: proto.String("9032234.92"),
-
-	// 	Affordances: &parcelsv1.ParcelAffordances{
-	// 		AffordanceIds:  []string{"69faa787-88e8-4b61-a67d-e23e82e903df", "e6a204ed-fa96-4456-83f7-0a809f5362f8"},
-	// 		MaxFar:         &far,
-	// 		MinLotSizeSqFt: &minLotSize,
-	// 		MaxHeightFt:    &maxHeight,
-	// 	},
-
-	// 	ImprovementSummary: &parcelsv1.ParcelImprovementsSummary{
-	// 		ImprovementIds:           []string{"6a4aaaea-f96e-430b-a646-963a88856e25", "f349b4b1-c7e3-4a88-96e0-e8fb297384ed"},
-	// 		TotalAreaSqFt:            totalArea,
-	// 		TotalBathrooms:           bath,
-	// 		TotalBedrooms:            bed,
-	// 		TotalUnits:               1,
-	// 		OldestYearBuilt:          &yearBuilt,
-	// 		NewestYearBuilt:          &yearBuilt,
-	// 		WorstConditionId:         nil,
-	// 		BestConditionId:          nil,
-	// 		MarketImprovementValue:   proto.String("450000"),
-	// 		AssessedImprovementValue: proto.String("450000"),
-	// 	},
-
-	// 	Properties: "",
-	// }
-
-	// res := &parcelsv1.GetParcelsByIdResponse{
-	// 	Parcels: parcels,
-	// }
-
-	// return connect.NewResponse(res), nil
-
-	// // Strip hidden newlines/spaces and force lowercase so sanitize result will matche Postgres's default behavior
-	// cleanAttr := strings.TrimSpace(req.Msg.GetAttributeName())
-	// cleanAttr = strings.ToLower(cleanAttr)
-
-	// safeColumn := pgx.Identifier{cleanAttr}.Sanitize()
-
-	// // Safely inject the sanitized identifier into the query string
-	// query := fmt.Sprintf(`SELECT %s::text FROM parcels WHERE parcel_id = $1`, safeColumn)
-
-	// s.logger.Debug("executing database query", slog.String("query", query))
-
-	// var value *string
-	// err := s.db.QueryRow(ctx, query, req.Msg.GetParcelId()).Scan(&value)
-	// if err != nil {
-	// 	// Gracefully handle the "column does not exist" error
-
-	// 	s.logger.Debug("GetParcelAttribute query failed", slog.Any("error", err))
-
-	// 	var pgErr *pgconn.PgError
-	// 	if errors.As(err, &pgErr) && pgErr.Code == "42703" { // 42703 is the Postgres code for undefined_column
-	// 		msg := fmt.Sprintf("attribute %s does not exist", req.Msg.AttributeName)
-	// 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New(msg))
-	// 	}
-
-	// 	if errors.Is(err, pgx.ErrNoRows) {
-	// 		return nil, connect.NewError(connect.CodeNotFound, errors.New("parcel not found"))
-	// 	}
-
-	// 	return nil, connect.NewError(connect.CodeInternal, errors.New("failed to retrieve attribute"))
-	// }
-
-	// res := &parcelsv1.GetParcelAttributeResponse{
-	// 	AttributeValue: *value,
-	// }
-	// return connect.NewResponse(res), nil
 }
 
 func (s *ParcelServer) UpdateParcel(
