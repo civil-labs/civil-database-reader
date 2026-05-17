@@ -100,7 +100,7 @@ func (s *ParcelServer) GetParcelsById(
 			&properties,
 		)
 
-		slog.Debug("scanned row", slog.Any("parcelId", parcelID))
+		s.logger.Debug("scanned row", slog.Any("parcelId", parcelID))
 
 		if err != nil {
 			s.logger.Error("failed to scan parcel row", "error", err, "parcelId", parcelID)
@@ -125,7 +125,7 @@ func (s *ParcelServer) GetParcelsById(
 			depthFt = &val
 		}
 
-		slog.Debug("converted units")
+		s.logger.Debug("converted units")
 
 		// 4. Populate the Protobuf map
 		// Assuming your proto generates pointers (*string, *float64) for optional fields
@@ -144,7 +144,7 @@ func (s *ParcelServer) GetParcelsById(
 			Properties: properties,
 		}
 
-		slog.Debug("populated protobuf map")
+		s.logger.Debug("populated protobuf map")
 	}
 
 	if err := rows.Err(); err != nil {
