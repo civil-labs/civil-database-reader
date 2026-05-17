@@ -54,13 +54,18 @@ func (s *ParcelServer) GetParcelsById(
 	`
 
 	rows, err := s.db.Query(ctx, query, parcelIds)
+
+	slog.Debug("performed GetParcelsById query")
+
 	if err != nil {
-		s.logger.Error("failed to query parcels", "error", err)
+		s.logger.Error("failed to query parcels", slog.Any("error", err))
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve parcel data"))
 	}
 	defer rows.Close()
 
 	for rows.Next() {
+		slog.Debug("scanning row")
+
 		// 1. Declare pointers for optional fields
 		var (
 			parcelID     string
@@ -90,6 +95,9 @@ func (s *ParcelServer) GetParcelsById(
 			&landUseID,
 			&properties,
 		)
+
+		slog.Debug("scanned row", slog.Any("parcelId", parcelID))
+
 		if err != nil {
 			s.logger.Error("failed to scan parcel row", "error", err, "parcelId", parcelID)
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("data unmarshaling error"))
@@ -113,6 +121,8 @@ func (s *ParcelServer) GetParcelsById(
 			depthFt = &val
 		}
 
+		slog.Debug("converted units")
+
 		// 4. Populate the Protobuf map
 		// Assuming your proto generates pointers (*string, *float64) for optional fields
 		parcels[parcelID] = &parcelsv1.Parcel{
@@ -129,6 +139,8 @@ func (s *ParcelServer) GetParcelsById(
 			// If properties is defined as an optional string in proto:
 			Properties: properties,
 		}
+
+		slog.Debug("populated protobuf map")
 	}
 
 	if err := rows.Err(); err != nil {
