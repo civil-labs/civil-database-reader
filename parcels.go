@@ -148,14 +148,18 @@ func (s *ParcelServer) GetParcelsById(
 	}
 
 	if err := rows.Err(); err != nil {
-		s.logger.Error("error iterating parcel rows", "error", err)
+		s.logger.Error("error iterating parcel rows", slog.Any("error", err))
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to process parcel stream"))
 	}
+
+	s.logger.Debug("constructing response")
 
 	// Wrap the map in your response payload
 	res := &parcelsv1.GetParcelsByIdResponse{
 		Parcels: parcels,
 	}
+
+	s.logger.Debug("sending response")
 
 	return connect.NewResponse(res), nil
 
