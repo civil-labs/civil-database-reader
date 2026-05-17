@@ -40,13 +40,15 @@ func (s *ParcelServer) GetParcelsById(
 
 	s.logger.Debug("building GetParcelsById query")
 
+	// Use defensive truncation to match what is returned from unbounded text columns
+	// to the max value promised in the proto contract
 	query := `
 		SELECT 
 			p.public_id::text,
-			aa.formatted_address,
+			LEFT(aa.formatted_address, 1024) AS safe_address,
 			a.public_id::text,
-			oa.name,
-			oada.formatted_address,
+			LEFT(oa.name, 512) AS safe_owner_name,
+			LEFT(oada.formatted_address, 1024) AS safe_owner_address,
 			o.public_id::text,
 			pa.land_area_sq_m,
 			pa.frontage_m,
