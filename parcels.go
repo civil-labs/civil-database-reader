@@ -53,6 +53,13 @@ func (s *ParcelServer) GetParcelsById(
 			pa.depth_m,
 			lu.land_use_id,
 			n.public_id::text,
+
+			aff.zoning_ids,
+            aff.affordance_ids,
+            aff.strict_max_far,
+            aff.strict_min_lot_size_sq_m,
+            aff.strict_max_height_m,
+
 			pa.properties::text
 		FROM parcels p
 		LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
@@ -64,6 +71,7 @@ func (s *ParcelServer) GetParcelsById(
 		LEFT JOIN address_attributes oada ON oad.address_id = oada.address_id
 		LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
 
+		-- Neighborhood Definition Joins
 		LEFT JOIN neighborhood_definitions nd 
             ON nd.public_id = $2::uuid
         LEFT JOIN parcel_neighborhood_definitions pnd 
@@ -71,6 +79,19 @@ func (s *ParcelServer) GetParcelsById(
             AND pnd.neighborhood_definition_id = nd.neighborhood_definition_id
         LEFT JOIN neighborhoods n 
             ON pnd.neighborhood_id = n.neighborhood_id
+
+		-- Aggregated Affordances Subquery
+        LEFT JOIN (
+            SELECT 
+                parcel_id,
+                array_remove(array_agg(DISTINCT zoning_id::text), NULL) AS zoning_ids,
+                array_remove(array_agg(DISTINCT public_id::text), NULL) AS affordance_ids,
+                MIN(max_far) AS strict_max_far,
+                MAX(min_lot_size_sq_m) AS strict_min_lot_size_sq_m,
+                MIN(max_height_m) AS strict_max_height_m
+            FROM parcel_affordances
+            GROUP BY parcel_id
+        ) aff ON p.parcel_id = aff.parcel_id
 
 		WHERE p.public_id = ANY($1::uuid[])
 	`
@@ -101,7 +122,14 @@ func (s *ParcelServer) GetParcelsById(
 			depthM         *float64
 			landUseID      *string
 			neighborhoodID *string
-			properties     *string
+
+			zoningIDs     []string
+			affordanceIDs []string
+			maxFar        *float64
+			minLotSizeSqM *float64
+			maxHeightM    *float64
+
+			properties *string
 		)
 
 		// 2. Scan directly into the pointers
@@ -117,6 +145,13 @@ func (s *ParcelServer) GetParcelsById(
 			&depthM,
 			&landUseID,
 			&neighborhoodID,
+
+			&zoningIDs,
+			&affordanceIDs,
+			&maxFar,
+			&minLotSizeSqM,
+			&maxHeightM,
+
 			&properties,
 		)
 
@@ -128,7 +163,7 @@ func (s *ParcelServer) GetParcelsById(
 		}
 
 		// 3. Metric to Imperial Conversions (safely handling nils)
-		var landAreaSqFt, frontageFt, depthFt *float64
+		var landAreaSqFt, frontageFt, depthFt, minLotSizeSqFt, maxHeightFt *float64
 
 		if landAreaSqM != nil {
 			// 1 sq meter = 10.7639 sq feet
@@ -145,14 +180,34 @@ func (s *ParcelServer) GetParcelsById(
 			depthFt = &val
 		}
 
+		if minLotSizeSqM != nil {
+			val := *minLotSizeSqM * 10.7639
+			minLotSizeSqFt = &val
+		}
+		if maxHeightM != nil {
+			val := *maxHeightM * 3.28084
+			maxHeightFt = &val
+		}
+
 		s.logger.Debug("converted units")
 
+		// If nothing was found, instantiate empty slices
+		if zoningIDs == nil {
+			zoningIDs = []string{}
+		}
+		if affordanceIDs == nil {
+			affordanceIDs = []string{}
+		}
+
 		affordances := &parcelsv1.ParcelAffordances{
-			AffordanceIds: []string{}, // Guarantees a non-nil slice (JSON "[]")
+			AffordanceIds:  zoningIDs, // Guarantees a non-nil slice (JSON "[]")
+			MaxFar:         maxFar,
+			MinLotSizeSqFt: minLotSizeSqFt,
+			MaxHeightFt:    maxHeightFt,
 		}
 
 		improvementSummary := &parcelsv1.ParcelImprovementsSummary{
-			ImprovementIds: []string{}, // Guarantees a non-nil slice
+			ImprovementIds: affordanceIDs, // Guarantees a non-nil slice
 		}
 
 		// 4. Populate the Protobuf map
