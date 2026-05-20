@@ -43,38 +43,50 @@ func (s *ParcelServer) GetParcelsById(
 	// Use defensive truncation to match what is returned from unbounded text columns
 	// to the max value promised in the proto contract
 	query := `
-		SELECT 
-			p.public_id::text,
-			LEFT(aa.formatted_address, 1024) AS safe_address,
-			a.public_id::text,
-			LEFT(oa.name, 512) AS safe_owner_name,
-			LEFT(oada.formatted_address, 1024) AS safe_owner_address,
-			o.public_id::text,
-			pa.land_area_sq_m,
-			pa.frontage_m,
-			pa.depth_m,
-			lu.land_use_id,
-			n.public_id::text,
+        SELECT 
+            p.public_id::text,
+            LEFT(aa.formatted_address, 1024) AS safe_address,
+            a.public_id::text,
+            LEFT(parties_agg.primary_owner_name, 128) AS safe_primary_owner_name,
+            LEFT(parties_agg.primary_owner_address, 256) AS safe_primary_owner_address,
+            parties_agg.party_ids,
+            pa.land_area_sq_m,
+            pa.frontage_m,
+            pa.depth_m,
+            lu.land_use_id,
+            n.public_id::text,
 
-			aff.zoning_ids,
+            aff.zoning_ids,
             aff.affordance_ids,
             aff.strict_max_far,
             aff.strict_min_lot_size_sq_m,
             aff.strict_max_height_m,
 
-			pa.properties::text
-		FROM parcels p
-		LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
-		LEFT JOIN addresses a ON pa.address_id = a.address_id
-		LEFT JOIN address_attributes aa ON a.address_id = aa.address_id
-		LEFT JOIN owners o ON pa.owner_id = o.owner_id
-		LEFT JOIN owner_attributes oa ON o.owner_id = oa.owner_id
-		LEFT JOIN addresses oad ON oa.address_id = oad.address_id
-		LEFT JOIN address_attributes oada ON oad.address_id = oada.address_id
-		LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
+            pa.properties::text
+        FROM parcels p
+        LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
+        LEFT JOIN addresses a ON pa.address_id = a.address_id
+        LEFT JOIN address_attributes aa ON a.address_id = aa.address_id
+        LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
 
-		-- Neighborhood Definition Joins
-		LEFT JOIN neighborhood_definitions nd 
+        -- New Party / Fractional Ownership Aggregation
+        LEFT JOIN (
+            SELECT 
+                pp.parcel_id,
+                -- Aggregate all unique party IDs, ordered by who holds the largest share
+                array_agg(pty.public_id::text ORDER BY pp.ownership_share DESC, pty.party_id ASC) AS party_ids,
+                -- Grab the name and address of the party with the highest ownership share to act as the "Primary"
+                (array_agg(pa_attr.name ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_name,
+                (array_agg(p_aa.formatted_address ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_address
+            FROM parcel_parties pp
+            JOIN parties pty ON pp.party_id = pty.party_id
+            LEFT JOIN party_attributes pa_attr ON pty.party_id = pa_attr.party_id
+            LEFT JOIN address_attributes p_aa ON pa_attr.address_id = p_aa.address_id
+            GROUP BY pp.parcel_id
+        ) parties_agg ON p.parcel_id = parties_agg.parcel_id
+
+        -- Neighborhood Definition Joins
+        LEFT JOIN neighborhood_definitions nd 
             ON nd.public_id = $2::uuid
         LEFT JOIN parcel_neighborhood_definitions pnd 
             ON p.parcel_id = pnd.parcel_id 
@@ -82,7 +94,7 @@ func (s *ParcelServer) GetParcelsById(
         LEFT JOIN neighborhoods n 
             ON pnd.neighborhood_id = n.neighborhood_id
 
-		-- Aggregated Affordances Subquery
+        -- Aggregated Affordances Subquery
         LEFT JOIN (
             SELECT 
                 parcel_id,
@@ -95,8 +107,8 @@ func (s *ParcelServer) GetParcelsById(
             GROUP BY parcel_id
         ) aff ON p.parcel_id = aff.parcel_id
 
-		WHERE p.public_id = ANY($1::uuid[])
-	`
+        WHERE p.public_id = ANY($1::uuid[])
+    `
 
 	rows, err := s.db.Query(ctx, query, parcelIds, neighborhoodDefIDArg)
 
@@ -113,17 +125,17 @@ func (s *ParcelServer) GetParcelsById(
 
 		// 1. Declare pointers for optional fields
 		var (
-			parcelID       string
-			address        *string
-			addressID      *string
-			ownerName      *string
-			ownerAddress   *string
-			ownerID        *string
-			landAreaSqM    *float64
-			frontageM      *float64
-			depthM         *float64
-			landUseID      *string
-			neighborhoodID *string
+			parcelID            string
+			address             *string
+			addressID           *string
+			primaryOwnerName    *string
+			primaryOwnerAddress *string
+			partyIDs            []string
+			landAreaSqM         *float64
+			frontageM           *float64
+			depthM              *float64
+			landUseID           *string
+			neighborhoodID      *string
 
 			zoningIDs     []string
 			affordanceIDs []string
@@ -139,9 +151,9 @@ func (s *ParcelServer) GetParcelsById(
 			&parcelID,
 			&address,
 			&addressID,
-			&ownerName,
-			&ownerAddress,
-			&ownerID,
+			&primaryOwnerName,
+			&primaryOwnerAddress,
+			&partyIDs,
 			&landAreaSqM,
 			&frontageM,
 			&depthM,
@@ -215,21 +227,21 @@ func (s *ParcelServer) GetParcelsById(
 		// 4. Populate the Protobuf map
 		// Assuming your proto generates pointers (*string, *float64) for optional fields
 		parcels[parcelID] = &parcelsv1.Parcel{
-			ParcelId:           parcelID,
-			Address:            address,
-			AddressId:          addressID,
-			OwnerName:          ownerName,
-			OwnerAddress:       ownerAddress,
-			OwnerId:            ownerID,
-			LandUseId:          landUseID,
-			NeighborhoodId:     neighborhoodID,
-			LandAreaSqFt:       landAreaSqFt,
-			FrontageFt:         frontageFt,
-			DepthFt:            depthFt,
-			ZoningIds:          zoningIDs,
-			Affordances:        affordances,
-			ImprovementSummary: improvementSummary,
-			Properties:         properties,
+			ParcelId:            parcelID,
+			Address:             address,
+			AddressId:           addressID,
+			PrimaryOwnerName:    primaryOwnerName,
+			PrimaryOwnerAddress: primaryOwnerAddress,
+			PartyIds:            partyIDs,
+			LandUseId:           landUseID,
+			NeighborhoodId:      neighborhoodID,
+			LandAreaSqFt:        landAreaSqFt,
+			FrontageFt:          frontageFt,
+			DepthFt:             depthFt,
+			ZoningIds:           zoningIDs,
+			Affordances:         affordances,
+			ImprovementSummary:  improvementSummary,
+			Properties:          properties,
 		}
 
 		s.logger.Debug("populated protobuf map")
