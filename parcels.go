@@ -142,11 +142,13 @@ func (s *ParcelServer) GetParcelsById(
 			landUseID           *string
 			neighborhoodID      *string
 
-			zoningIDs     []string
-			affordanceIDs []string
-			maxFar        *float64
-			minLotSizeSqM *float64
-			maxHeightM    *float64
+			zoningIDs               []string
+			affordanceIDs           []string
+			maxFar                  *float64
+			minLotSizeSqM           *float64
+			maxHeightM              *float64
+			maxDwellingUnitsPerHect *float64
+			maxLotCoveragePct       *float64
 
 			properties *string
 		)
@@ -170,6 +172,8 @@ func (s *ParcelServer) GetParcelsById(
 			&maxFar,
 			&minLotSizeSqM,
 			&maxHeightM,
+			&maxDwellingUnitsPerHect,
+			&maxLotCoveragePct,
 
 			&properties,
 		)
