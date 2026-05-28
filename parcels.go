@@ -99,10 +99,12 @@ func (s *ParcelServer) GetParcelsById(
             SELECT 
                 parcel_id,
                 array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_ids,
-                array_remove(array_agg(DISTINCT public_id::text), NULL) AS affordance_ids,
+                array_remove(array_agg(DISTINCT pa.public_id::text), NULL) AS affordance_ids,
                 MIN(max_far) AS strict_max_far,
                 MAX(min_lot_size_sq_m) AS strict_min_lot_size_sq_m,
-                MIN(max_height_m) AS strict_max_height_m
+                MIN(max_height_m) AS strict_max_height_m,
+				MIN(max_dwelling_units_per_hectare) AS strict_max_dwelling_units_per_hectare,
+				MIN(max_lot_coverage_pct) AS strict_max_lot_coverage_pct
             FROM parcel_affordances pa
 			LEFT JOIN zoning z ON pa.zoning_id = z.zoning_id
             GROUP BY parcel_id
