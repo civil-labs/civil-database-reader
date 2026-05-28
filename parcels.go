@@ -61,6 +61,8 @@ func (s *ParcelServer) GetParcelsById(
             aff.strict_max_far,
             aff.strict_min_lot_size_sq_m,
             aff.strict_max_height_m,
+			aff.strict_max_dwelling_units_per_hectare,
+			aff.strict_max_dwelling_units_per_hectare
 
             pa.properties::text
         FROM parcels p
