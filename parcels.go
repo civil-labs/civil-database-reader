@@ -186,18 +186,20 @@ func (s *ParcelServer) GetParcelsById(
 		}
 
 		// 3. Metric to Imperial Conversions (safely handling nils)
-		var landAreaSqFt, frontageFt, depthFt, minLotSizeSqFt, maxHeightFt *float64
+		var landAreaSqFt, frontageFt, depthFt, minLotSizeSqFt, maxHeightFt, maxDwellingUnitsPerAcre *float64
 
 		if landAreaSqM != nil {
 			// 1 sq meter = 10.7639 sq feet
 			val := *landAreaSqM * 10.7639
 			landAreaSqFt = &val
 		}
+
 		if frontageM != nil {
 			// 1 meter = 3.28084 feet
 			val := *frontageM * 3.28084
 			frontageFt = &val
 		}
+
 		if depthM != nil {
 			val := *depthM * 3.28084
 			depthFt = &val
@@ -207,9 +209,15 @@ func (s *ParcelServer) GetParcelsById(
 			val := *minLotSizeSqM * 10.7639
 			minLotSizeSqFt = &val
 		}
+
 		if maxHeightM != nil {
 			val := *maxHeightM * 3.28084
 			maxHeightFt = &val
+		}
+
+		if maxDwellingUnitsPerHect != nil {
+			val := *maxDwellingUnitsPerHect * 0.404686
+			maxDwellingUnitsPerAcre = &val
 		}
 
 		s.logger.Debug("converted units")
@@ -223,10 +231,12 @@ func (s *ParcelServer) GetParcelsById(
 		}
 
 		affordances := &parcelsv1.ParcelAffordances{
-			AffordanceIds:  affordanceIDs,
-			MaxFar:         maxFar,
-			MinLotSizeSqFt: minLotSizeSqFt,
-			MaxHeightFt:    maxHeightFt,
+			AffordanceIds:           affordanceIDs,
+			MaxFar:                  maxFar,
+			MinLotSizeSqFt:          minLotSizeSqFt,
+			MaxHeightFt:             maxHeightFt,
+			MaxDwellingUnitsPerAcre: maxDwellingUnitsPerAcre,
+			MaxLotCoveragePct:       maxLotCoveragePct,
 		}
 
 		improvementSummary := &parcelsv1.ParcelImprovementsSummary{
