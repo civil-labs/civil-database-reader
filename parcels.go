@@ -53,10 +53,10 @@ func (s *ParcelServer) GetParcelsById(
             pa.land_area_sq_m,
             pa.frontage_m,
             pa.depth_m,
-            lu.land_use_id,
+            lu.public_id::text,
             n.public_id::text,
 
-            aff.zoning_ids,
+            aff.zoning_public_ids,
             aff.affordance_ids,
             aff.strict_max_far,
             aff.strict_min_lot_size_sq_m,
@@ -98,12 +98,13 @@ func (s *ParcelServer) GetParcelsById(
         LEFT JOIN (
             SELECT 
                 parcel_id,
-                array_remove(array_agg(DISTINCT zoning_id::text), NULL) AS zoning_ids,
+                array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_ids,
                 array_remove(array_agg(DISTINCT public_id::text), NULL) AS affordance_ids,
                 MIN(max_far) AS strict_max_far,
                 MAX(min_lot_size_sq_m) AS strict_min_lot_size_sq_m,
                 MIN(max_height_m) AS strict_max_height_m
-            FROM parcel_affordances
+            FROM parcel_affordances pa
+			LEFT JOIN zoning z ON pa.zoning_id = z.zoning_id
             GROUP BY parcel_id
         ) aff ON p.parcel_id = aff.parcel_id
 
