@@ -63,6 +63,18 @@ func (s *ParcelServer) GetParcelsById(
             aff.strict_max_height_m,
 			aff.strict_max_dwelling_units_per_hectare,
 			aff.strict_max_lot_coverage_pct,
+			imp_agg.improvement_ids,
+			COALESCE(imp_agg.total_area_sq_m, 0),
+			COALESCE(imp_agg.total_bathrooms, 0),
+			COALESCE(imp_agg.total_bedrooms, 0),
+			COALESCE(imp_agg.total_units, 0),
+			imp_agg.oldest_year_built,
+			imp_agg.newest_year_built,
+			imp_agg.weighted_average_depreciation_modifier,
+			imp_agg.worst_condition_id,
+			imp_agg.best_condition_id,
+			imp_agg.market_improvement_value,
+			imp_agg.assessed_improvement_value,
 
             pa.properties::text
         FROM parcels p
@@ -112,7 +124,34 @@ func (s *ParcelServer) GetParcelsById(
             GROUP BY parcel_id
         ) aff ON p.parcel_id = aff.parcel_id
 
+        -- Aggregated Improvements Summary Subquery
+        LEFT JOIN (
+            SELECT 
+                pi.parcel_id,
+                array_remove(array_agg(DISTINCT imp.public_id::text), NULL) AS improvement_ids,
+                COALESCE(SUM(attr.area_sq_m), 0) AS total_area_sq_m,
+                COALESCE(SUM(attr.bathrooms), 0) AS total_bathrooms,
+                COALESCE(SUM(attr.bedrooms), 0) AS total_bedrooms,
+                COALESCE(SUM(attr.units), 0) AS total_units,
+                MIN(attr.year_built) AS oldest_year_built,
+                MAX(attr.year_built) AS newest_year_built,
+                (SUM(COALESCE(attr.area_sq_m, 1) * cond_attr.depreciation_modifier) / NULLIF(SUM(COALESCE(attr.area_sq_m, 1)), 0))::numeric(5,4)::text AS weighted_average_depreciation_modifier,
+                (array_agg(cond.public_id::text ORDER BY cond_attr.depreciation_modifier ASC, cond.improvement_condition_id ASC))[1] AS worst_condition_id,
+                (array_agg(cond.public_id::text ORDER BY cond_attr.depreciation_modifier DESC, cond.improvement_condition_id ASC))[1] AS best_condition_id,
+                SUM(val.market_value)::numeric(19,4)::text AS market_improvement_value,
+                SUM(val.assessed_value)::numeric(19,4)::text AS assessed_improvement_value
+            FROM parcel_improvements pi
+            JOIN improvements imp ON pi.improvement_id = imp.improvement_id
+            LEFT JOIN improvement_attributes attr ON imp.improvement_id = attr.improvement_id
+            LEFT JOIN improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id AND NOT cond.is_voided
+            LEFT JOIN improvement_condition_attributes cond_attr ON cond.improvement_condition_id = cond_attr.improvement_condition_id
+            LEFT JOIN improvement_valuations val ON imp.improvement_id = val.improvement_id
+            WHERE NOT imp.is_voided
+            GROUP BY pi.parcel_id
+        ) imp_agg ON p.parcel_id = imp_agg.parcel_id
+
         WHERE p.public_id = ANY($1::uuid[])
+
     `
 
 	rows, err := s.db.Query(ctx, query, parcelIds, neighborhoodDefIDArg)
@@ -150,6 +189,19 @@ func (s *ParcelServer) GetParcelsById(
 			maxDwellingUnitsPerHect *float64
 			maxLotCoveragePct       *float64
 
+			improvementIDs   []string
+			totalAreaSqM     float64
+			totalBathrooms   int32
+			totalBedrooms    int32
+			totalUnits       int32
+			oldestYearBuilt  *int32
+			newestYearBuilt  *int32
+			weightedDeprMod  *string
+			worstConditionID *string
+			bestConditionID  *string
+			marketImpValue   *string
+			assessedImpValue *string
+
 			properties *string
 		)
 
@@ -174,6 +226,19 @@ func (s *ParcelServer) GetParcelsById(
 			&maxHeightM,
 			&maxDwellingUnitsPerHect,
 			&maxLotCoveragePct,
+
+			&improvementIDs,
+			&totalAreaSqM,
+			&totalBathrooms,
+			&totalBedrooms,
+			&totalUnits,
+			&oldestYearBuilt,
+			&newestYearBuilt,
+			&weightedDeprMod,
+			&worstConditionID,
+			&bestConditionID,
+			&marketImpValue,
+			&assessedImpValue,
 
 			&properties,
 		)
@@ -220,6 +285,8 @@ func (s *ParcelServer) GetParcelsById(
 			maxDwellingUnitsPerAcre = &val
 		}
 
+		totalAreaSqFt := totalAreaSqM * 10.7639
+
 		s.logger.Debug("converted units")
 
 		// If nothing was found, initialize empty slices
@@ -228,6 +295,9 @@ func (s *ParcelServer) GetParcelsById(
 		}
 		if affordanceIDs == nil {
 			affordanceIDs = []string{}
+		}
+		if improvementIDs == nil {
+			improvementIDs = []string{}
 		}
 
 		affordances := &parcelsv1.ParcelAffordances{
@@ -240,7 +310,18 @@ func (s *ParcelServer) GetParcelsById(
 		}
 
 		improvementSummary := &parcelsv1.ParcelImprovementsSummary{
-			ImprovementIds: []string{}, // Guarantees a non-nil slice
+			ImprovementIds:                      improvementIDs,
+			TotalAreaSqFt:                       totalAreaSqFt,
+			TotalBathrooms:                      totalBathrooms,
+			TotalBedrooms:                       totalBedrooms,
+			TotalUnits:                          totalUnits,
+			OldestYearBuilt:                     oldestYearBuilt,
+			NewestYearBuilt:                     newestYearBuilt,
+			WeightedAverageDepreciationModifier: weightedDeprMod,
+			WorstConditionId:                    worstConditionID,
+			BestConditionId:                     bestConditionID,
+			MarketImprovementValue:              marketImpValue,
+			AssessedImprovementValue:            assessedImpValue,
 		}
 
 		// 4. Populate the Protobuf map
