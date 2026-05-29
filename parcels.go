@@ -20,7 +20,9 @@ func (s *ParcelServer) GetParcelsById(
 	req *connect.Request[parcelsv1.GetParcelsByIdRequest],
 ) (*connect.Response[parcelsv1.GetParcelsByIdResponse], error) {
 
-	s.logger.Debug("received GetParcelsById request", slog.Any("parcelIds", req.Msg.ParcelIds))
+	s.logger.Debug("received GetParcelsById request", slog.Any("parcelIds", req.Msg.ParcelIds),
+		slog.Any("neighborhoodDefinitionId", req.Msg.NeighborhoodDefinitionId),
+		slog.Any("valuationId", req.Msg.ValuationId))
 
 	parcelIds := req.Msg.ParcelIds
 
