@@ -34,6 +34,11 @@ func (s *ParcelServer) GetParcelsById(
 		neighborhoodDefIDArg = &defID
 	}
 
+	var valuationIDArg *string
+	if valID := req.Msg.GetValuationId(); valID != "" {
+		valuationIDArg = &valID
+	}
+
 	// Empty arrays are blocked by the connect handler via the proto def
 
 	s.logger.Debug("creating GetParcelsById map")
@@ -65,6 +70,10 @@ func (s *ParcelServer) GetParcelsById(
             aff.strict_max_height_m,
 			aff.strict_max_dwelling_units_per_hectare,
 			aff.strict_max_lot_coverage_pct,
+
+			pv_agg.market_land_value,
+			pv_agg.assessed_land_value,
+
 			imp_agg.improvement_ids,
 			COALESCE(imp_agg.total_area_sq_m, 0),
 			COALESCE(imp_agg.total_bathrooms, 0),
@@ -126,6 +135,17 @@ func (s *ParcelServer) GetParcelsById(
             GROUP BY parcel_id
         ) aff ON p.parcel_id = aff.parcel_id
 
+        -- Aggregated Parcel Valuations Subquery
+        LEFT JOIN (
+            SELECT 
+                pv.parcel_id,
+                pv.market_value::numeric(19,4)::text AS market_land_value,
+                pv.assessed_value::numeric(19,4)::text AS assessed_land_value
+            FROM parcel_valuations pv
+            JOIN valuations v ON pv.valuation_id = v.valuation_id
+            WHERE $3::uuid IS NOT NULL AND v.public_id = $3::uuid
+        ) pv_agg ON p.parcel_id = pv_agg.parcel_id
+
         -- Aggregated Improvements Summary Subquery
         LEFT JOIN (
             SELECT 
@@ -148,15 +168,20 @@ func (s *ParcelServer) GetParcelsById(
             LEFT JOIN improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id AND NOT cond.is_voided
             LEFT JOIN improvement_condition_attributes cond_attr ON cond.improvement_condition_id = cond_attr.improvement_condition_id
             LEFT JOIN improvement_valuations val ON imp.improvement_id = val.improvement_id
+                AND $3::uuid IS NOT NULL
+                AND val.valuation_id = (
+                    SELECT v.valuation_id 
+                    FROM valuations v 
+                    WHERE v.public_id = $3::uuid
+                )
             WHERE NOT imp.is_voided
             GROUP BY pi.parcel_id
         ) imp_agg ON p.parcel_id = imp_agg.parcel_id
 
         WHERE p.public_id = ANY($1::uuid[])
-
     `
 
-	rows, err := s.db.Query(ctx, query, parcelIds, neighborhoodDefIDArg)
+	rows, err := s.db.Query(ctx, query, parcelIds, neighborhoodDefIDArg, valuationIDArg)
 
 	s.logger.Debug("performed GetParcelsById query")
 
@@ -190,6 +215,9 @@ func (s *ParcelServer) GetParcelsById(
 			maxHeightM              *float64
 			maxDwellingUnitsPerHect *float64
 			maxLotCoveragePct       *float64
+
+			marketLandValue     *string
+			assessedLandValue   *string
 
 			improvementIDs   []string
 			totalAreaSqM     float64
@@ -228,6 +256,9 @@ func (s *ParcelServer) GetParcelsById(
 			&maxHeightM,
 			&maxDwellingUnitsPerHect,
 			&maxLotCoveragePct,
+
+			&marketLandValue,
+			&assessedLandValue,
 
 			&improvementIDs,
 			&totalAreaSqM,
@@ -341,6 +372,8 @@ func (s *ParcelServer) GetParcelsById(
 			FrontageFt:          frontageFt,
 			DepthFt:             depthFt,
 			ZoningIds:           zoningIDs,
+			MarketLandValue:     marketLandValue,
+			AssessedLandValue:   assessedLandValue,
 			Affordances:         affordances,
 			ImprovementSummary:  improvementSummary,
 			Properties:          properties,
