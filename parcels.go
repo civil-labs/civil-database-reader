@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	parcelsv1 "github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type ParcelServer struct {
@@ -216,8 +220,8 @@ func (s *ParcelServer) GetParcelsById(
 			maxDwellingUnitsPerHect *float64
 			maxLotCoveragePct       *float64
 
-			marketLandValue     *string
-			assessedLandValue   *string
+			marketLandValue   *string
+			assessedLandValue *string
 
 			improvementIDs   []string
 			totalAreaSqM     float64
@@ -361,7 +365,7 @@ func (s *ParcelServer) GetParcelsById(
 		// Assuming your proto generates pointers (*string, *float64) for optional fields
 		parcels[parcelID] = &parcelsv1.Parcel{
 			ParcelId:            parcelID,
-			Address:             address,
+			FormattedAddress:    address,
 			AddressId:           addressID,
 			PrimaryOwnerName:    primaryOwnerName,
 			PrimaryOwnerAddress: primaryOwnerAddress,
@@ -495,4 +499,629 @@ func (s *ParcelServer) GetNumericalParcelStatsById(
 	res := &parcelsv1.GetNumericalParcelStatsByIdResponse{}
 
 	return connect.NewResponse(res), nil
+}
+
+type CompParcelInfo struct {
+	ParcelID            string
+	AddressID           string
+	FormattedAddress    string
+	LandAreaSqFt        *float64
+	FrontageFt          *float64
+	DepthFt             *float64
+	LandUseID           *string
+	ZoningIDs           []string
+	ImprovementAreaSqFt float64
+	YearBuilt           *int32
+	Bedrooms            int32
+	Bathrooms           int32
+	Units               int32
+	ConditionIDs        []string
+	ImprovementTypeIDs  []string
+	SaleTime            *time.Time
+	SalePrice           *string
+}
+
+func (s *ParcelServer) fetchParcelsForComps(
+	ctx context.Context,
+	subjectID string,
+	candidateIDs []string,
+	wktPolygon *string,
+	startTime *time.Time,
+	endTime *time.Time,
+	criteria []*parcelsv1.ComparableCriteria,
+	isSales bool,
+) (map[string]*CompParcelInfo, error) {
+
+	var selectFields = []string{
+		"p.public_id::text",
+		"LEFT(aa.formatted_address, 1024) AS safe_address",
+		"a.public_id::text",
+		"pa.land_area_sq_m",
+		"pa.frontage_m",
+		"pa.depth_m",
+	}
+
+	var joins = []string{
+		"LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id",
+		"LEFT JOIN addresses a ON pa.address_id = a.address_id",
+		"LEFT JOIN address_attributes aa ON a.address_id = aa.address_id",
+	}
+
+	if wktPolygon != nil {
+		joins = append(joins, "LEFT JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id")
+	}
+
+	var (
+		parcelID           string
+		address            *string
+		addressID          *string
+		landAreaSqM        *float64
+		frontageM          *float64
+		depthM             *float64
+		landUseID          *string
+		zoningIDs          []string
+		improvementIDs     []string
+		improvementTypeIDs []string
+		conditionIDs       []string
+		totalAreaSqM       float64
+		totalBathrooms     int32
+		totalBedrooms      int32
+		totalUnits         int32
+		oldestYearBuilt    *int32
+		newestYearBuilt    *int32
+		saleTime           *time.Time
+		salePrice          *string
+	)
+
+	var scanDest = []any{
+		&parcelID,
+		&address,
+		&addressID,
+		&landAreaSqM,
+		&frontageM,
+		&depthM,
+	}
+
+	var joinedImprovements, joinedZoning, joinedLandUse bool
+
+	for _, c := range criteria {
+		if c == nil {
+			continue
+		}
+		switch c.GetAttribute() {
+		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_LAND_USE_ID:
+			if !joinedLandUse {
+				joins = append(joins, "LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id")
+				selectFields = append(selectFields, "lu.public_id::text")
+				scanDest = append(scanDest, &landUseID)
+				joinedLandUse = true
+			}
+
+		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_ZONING_ID:
+			if !joinedZoning {
+				joins = append(joins, `
+                    LEFT JOIN (
+                        SELECT 
+                            parcel_id,
+                            array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_public_ids
+                        FROM parcel_affordances pa
+                        LEFT JOIN zoning z ON pa.zoning_id = z.zoning_id
+                        GROUP BY parcel_id
+                    ) aff ON p.parcel_id = aff.parcel_id`)
+				selectFields = append(selectFields, "aff.zoning_public_ids")
+				scanDest = append(scanDest, &zoningIDs)
+				joinedZoning = true
+			}
+
+		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_AREA_SQ_FT,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BEDROOMS,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BATHROOMS,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_UNITS,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
+			if !joinedImprovements {
+				joins = append(joins, `
+                    LEFT JOIN (
+                        SELECT 
+                            pi.parcel_id,
+                            array_remove(array_agg(DISTINCT imp.public_id::text), NULL) AS improvement_ids,
+                            array_remove(array_agg(DISTINCT imptype.public_id::text), NULL) AS improvement_type_ids,
+                            array_remove(array_agg(DISTINCT cond.public_id::text), NULL) AS condition_ids,
+                            COALESCE(SUM(attr.area_sq_m), 0) AS total_area_sq_m,
+                            COALESCE(SUM(attr.bathrooms), 0) AS total_bathrooms,
+                            COALESCE(SUM(attr.bedrooms), 0) AS total_bedrooms,
+                            COALESCE(SUM(attr.units), 0) AS total_units,
+                            MIN(attr.year_built) AS oldest_year_built,
+                            MAX(attr.year_built) AS newest_year_built
+                        FROM parcel_improvements pi
+                        JOIN improvements imp ON pi.improvement_id = imp.improvement_id
+                        LEFT JOIN improvement_attributes attr ON imp.improvement_id = attr.improvement_id
+                        LEFT JOIN improvement_types imptype ON attr.improvement_type_id = imptype.improvement_type_id
+                        LEFT JOIN improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id AND NOT cond.is_voided
+                        WHERE NOT imp.is_voided
+                        GROUP BY pi.parcel_id
+                    ) imp_agg ON p.parcel_id = imp_agg.parcel_id`)
+				selectFields = append(selectFields,
+					"imp_agg.improvement_ids",
+					"imp_agg.improvement_type_ids",
+					"imp_agg.condition_ids",
+					"COALESCE(imp_agg.total_area_sq_m, 0)",
+					"COALESCE(imp_agg.total_bathrooms, 0)",
+					"COALESCE(imp_agg.total_bedrooms, 0)",
+					"COALESCE(imp_agg.total_units, 0)",
+					"imp_agg.oldest_year_built",
+					"imp_agg.newest_year_built",
+				)
+				scanDest = append(scanDest,
+					&improvementIDs,
+					&improvementTypeIDs,
+					&conditionIDs,
+					&totalAreaSqM,
+					&totalBathrooms,
+					&totalBedrooms,
+					&totalUnits,
+					&oldestYearBuilt,
+					&newestYearBuilt,
+				)
+				joinedImprovements = true
+			}
+		}
+	}
+
+	if isSales {
+		joins = append(joins, `
+            LEFT JOIN (
+                SELECT DISTINCT ON (rtpp.parcel_id)
+                    rtpp.parcel_id,
+                    rpt.transfer_timestamp,
+                    rpt.transfer_amount::numeric(19,4)::text AS sale_price
+                FROM real_property_transfer_party_parcels rtpp
+                JOIN real_property_transfers rpt ON rtpp.real_property_transfer_id = rpt.real_property_transfer_id
+                WHERE ($4::timestamptz IS NULL OR rpt.transfer_timestamp >= $4::timestamptz)
+                  AND ($5::timestamptz IS NULL OR rpt.transfer_timestamp <= $5::timestamptz)
+                ORDER BY rtpp.parcel_id, rpt.transfer_timestamp DESC
+            ) sales_agg ON p.parcel_id = sales_agg.parcel_id`)
+		selectFields = append(selectFields, "sales_agg.transfer_timestamp", "sales_agg.sale_price")
+		scanDest = append(scanDest, &saleTime, &salePrice)
+	}
+
+	query := fmt.Sprintf(`
+        SELECT 
+            %s
+        FROM parcels p
+        %s
+        WHERE NOT p.is_voided
+          AND (
+            (p.public_id = $3::uuid)
+            OR ($1::uuid[] IS NOT NULL AND p.public_id = ANY($1::uuid[]))
+            OR ($1::uuid[] IS NULL AND $2::text IS NOT NULL AND ST_Intersects(pg.geom_web, ST_GeomFromText($2, 4326)))
+          )
+    `, strings.Join(selectFields, ",\n"), strings.Join(joins, "\n"))
+
+	s.logger.Debug("performing dynamic comps query", slog.String("sql", query))
+
+	var candidateIDsArg *[]string
+	if len(candidateIDs) > 0 {
+		candidateIDsArg = &candidateIDs
+	}
+
+	rows, err := s.db.Query(ctx, query, candidateIDsArg, wktPolygon, subjectID, startTime, endTime)
+	if err != nil {
+		s.logger.Error("failed to query parcels for comps", slog.Any("error", err))
+		return nil, fmt.Errorf("failed to retrieve comp parcel data: %w", err)
+	}
+	defer rows.Close()
+
+	parcels := make(map[string]*CompParcelInfo)
+	for rows.Next() {
+		err := rows.Scan(scanDest...)
+		if err != nil {
+			s.logger.Error("failed to scan comp parcel row", slog.Any("error", err))
+			return nil, fmt.Errorf("data unmarshaling error in comps query: %w", err)
+		}
+
+		// Unit conversions
+		var landAreaSqFt, frontageFt, depthFt *float64
+		if landAreaSqM != nil {
+			val := *landAreaSqM * 10.7639
+			landAreaSqFt = &val
+		}
+		if frontageM != nil {
+			val := *frontageM * 3.28084
+			frontageFt = &val
+		}
+		if depthM != nil {
+			val := *depthM * 3.28084
+			depthFt = &val
+		}
+		totalAreaSqFt := totalAreaSqM * 10.7639
+
+		var yearBuilt *int32
+		if newestYearBuilt != nil {
+			yearBuilt = newestYearBuilt
+		} else {
+			yearBuilt = oldestYearBuilt
+		}
+
+		if zoningIDs == nil {
+			zoningIDs = []string{}
+		}
+		if conditionIDs == nil {
+			conditionIDs = []string{}
+		}
+		if improvementTypeIDs == nil {
+			improvementTypeIDs = []string{}
+		}
+
+		addrID := ""
+		if addressID != nil {
+			addrID = *addressID
+		}
+		addrStr := ""
+		if address != nil {
+			addrStr = *address
+		}
+
+		parcels[parcelID] = &CompParcelInfo{
+			ParcelID:            parcelID,
+			AddressID:           addrID,
+			FormattedAddress:    addrStr,
+			LandAreaSqFt:        landAreaSqFt,
+			FrontageFt:          frontageFt,
+			DepthFt:             depthFt,
+			LandUseID:           landUseID,
+			ZoningIDs:           zoningIDs,
+			ImprovementAreaSqFt: totalAreaSqFt,
+			YearBuilt:           yearBuilt,
+			Bedrooms:            totalBedrooms,
+			Bathrooms:           totalBathrooms,
+			Units:               totalUnits,
+			ConditionIDs:        conditionIDs,
+			ImprovementTypeIDs:  improvementTypeIDs,
+			SaleTime:            saleTime,
+			SalePrice:           salePrice,
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading parcel rows: %w", err)
+	}
+
+	return parcels, nil
+}
+
+func getNumericalValue(p *CompParcelInfo, attr parcelsv1.ParcelAttribute) (*float64, bool) {
+	switch attr {
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_LAND_AREA_SQ_FT:
+		return p.LandAreaSqFt, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_FRONTAGE_FT:
+		return p.FrontageFt, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_DEPTH_FT:
+		return p.DepthFt, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_AREA_SQ_FT:
+		val := p.ImprovementAreaSqFt
+		return &val, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR:
+		if p.YearBuilt == nil {
+			return nil, true
+		}
+		val := float64(*p.YearBuilt)
+		return &val, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BEDROOMS:
+		val := float64(p.Bedrooms)
+		return &val, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BATHROOMS:
+		val := float64(p.Bathrooms)
+		return &val, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_UNITS:
+		val := float64(p.Units)
+		return &val, true
+	}
+	return nil, false
+}
+
+func checkCategoricalMatch(sub *CompParcelInfo, cand *CompParcelInfo, attr parcelsv1.ParcelAttribute, tolerance []string) bool {
+	switch attr {
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_LAND_USE_ID:
+		candVal := ""
+		if cand.LandUseID != nil {
+			candVal = *cand.LandUseID
+		}
+		if len(tolerance) > 0 {
+			for _, t := range tolerance {
+				if t == candVal {
+					return true
+				}
+			}
+			return false
+		} else {
+			subVal := ""
+			if sub.LandUseID != nil {
+				subVal = *sub.LandUseID
+			}
+			return candVal == subVal
+		}
+
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_ZONING_ID:
+		if len(tolerance) > 0 {
+			return sliceOverlap(cand.ZoningIDs, tolerance)
+		} else {
+			return sliceOverlap(cand.ZoningIDs, sub.ZoningIDs)
+		}
+
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID:
+		if len(tolerance) > 0 {
+			return sliceOverlap(cand.ConditionIDs, tolerance)
+		} else {
+			return sliceOverlap(cand.ConditionIDs, sub.ConditionIDs)
+		}
+
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
+		if len(tolerance) > 0 {
+			return sliceOverlap(cand.ImprovementTypeIDs, tolerance)
+		} else {
+			return sliceOverlap(cand.ImprovementTypeIDs, sub.ImprovementTypeIDs)
+		}
+	}
+	return false
+}
+
+func sliceOverlap(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getCategoricalValueString(p *CompParcelInfo, attr parcelsv1.ParcelAttribute) *string {
+	switch attr {
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_LAND_USE_ID:
+		return p.LandUseID
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_ZONING_ID:
+		if len(p.ZoningIDs) == 0 {
+			return nil
+		}
+		val := strings.Join(p.ZoningIDs, ",")
+		return &val
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID:
+		if len(p.ConditionIDs) == 0 {
+			return nil
+		}
+		val := strings.Join(p.ConditionIDs, ",")
+		return &val
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
+		if len(p.ImprovementTypeIDs) == 0 {
+			return nil
+		}
+		val := strings.Join(p.ImprovementTypeIDs, ",")
+		return &val
+	}
+	return nil
+}
+
+func (s *ParcelServer) GetEquityComparables(
+	ctx context.Context,
+	req *connect.Request[parcelsv1.GetEquityComparablesRequest],
+) (*connect.Response[parcelsv1.GetEquityComparablesResponse], error) {
+
+	s.logger.Debug("received GetEquityComparables request",
+		slog.Any("selected_parcel_ids", req.Msg.SelectedParcelIds),
+		slog.String("wkt_polygon", req.Msg.WktPolygon))
+
+	if len(req.Msg.SelectedParcelIds) == 0 {
+		return connect.NewResponse(&parcelsv1.GetEquityComparablesResponse{
+			Parcels: make(map[string]*parcelsv1.EquityComparableParcel),
+		}), nil
+	}
+
+	subjectID := req.Msg.SelectedParcelIds[0]
+
+	var candidateIDs []string
+	var polygonArg *string
+
+	if len(req.Msg.SelectedParcelIds) > 1 {
+		candidateIDs = req.Msg.SelectedParcelIds[1:]
+	} else {
+		if p := req.Msg.GetWktPolygon(); p != "" {
+			polygonArg = &p
+		}
+	}
+
+	parcelsMap, err := s.fetchParcelsForComps(ctx, subjectID, candidateIDs, polygonArg, nil, nil, req.Msg.Criteria, false)
+	if err != nil {
+		s.logger.Error("failed to fetch parcels for equity comps", slog.Any("error", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("database query error"))
+	}
+
+	subject, ok := parcelsMap[subjectID]
+	if !ok {
+		s.logger.Warn("subject parcel not found in database", slog.String("subject_id", subjectID))
+		return connect.NewResponse(&parcelsv1.GetEquityComparablesResponse{
+			Parcels: make(map[string]*parcelsv1.EquityComparableParcel),
+		}), nil
+	}
+
+	resParcels := make(map[string]*parcelsv1.EquityComparableParcel)
+
+	for id, cand := range parcelsMap {
+		if id == subjectID {
+			continue
+		}
+
+		matched := true
+		var attrs []*parcelsv1.ComparableAttribute
+
+		for _, crit := range req.Msg.Criteria {
+			if crit == nil {
+				continue
+			}
+
+			attr := crit.GetAttribute()
+			numVal, isNum := getNumericalValue(cand, attr)
+			if isNum {
+				subNumVal, _ := getNumericalValue(subject, attr)
+				if numVal == nil || subNumVal == nil {
+					matched = false
+					break
+				}
+				diff := math.Abs(*numVal - *subNumVal)
+				if diff > crit.GetNumericalTolerance() {
+					matched = false
+					break
+				}
+				attrs = append(attrs, &parcelsv1.ComparableAttribute{
+					Attribute:      attr,
+					NumericalValue: numVal,
+				})
+			} else {
+				if !checkCategoricalMatch(subject, cand, attr, crit.GetCategoricalTolerance()) {
+					matched = false
+					break
+				}
+				catStr := getCategoricalValueString(cand, attr)
+				attrs = append(attrs, &parcelsv1.ComparableAttribute{
+					Attribute:        attr,
+					CategoricalValue: catStr,
+				})
+			}
+		}
+
+		if matched {
+			resParcels[id] = &parcelsv1.EquityComparableParcel{
+				ParcelId:         cand.ParcelID,
+				AddressId:        cand.AddressID,
+				FormattedAddress: cand.FormattedAddress,
+				Attributes:       attrs,
+			}
+		}
+	}
+
+	return connect.NewResponse(&parcelsv1.GetEquityComparablesResponse{
+		Parcels: resParcels,
+	}), nil
+}
+
+func (s *ParcelServer) GetSalesComparables(
+	ctx context.Context,
+	req *connect.Request[parcelsv1.GetSalesComparablesRequest],
+) (*connect.Response[parcelsv1.GetSalesComparablesResponse], error) {
+
+	s.logger.Debug("received GetSalesComparables request",
+		slog.Any("selected_parcel_ids", req.Msg.SelectedParcelIds),
+		slog.String("wkt_polygon", req.Msg.WktPolygon))
+
+	if len(req.Msg.SelectedParcelIds) == 0 {
+		return connect.NewResponse(&parcelsv1.GetSalesComparablesResponse{
+			Parcels: make(map[string]*parcelsv1.SaleComparableParcel),
+		}), nil
+	}
+
+	subjectID := req.Msg.SelectedParcelIds[0]
+
+	var candidateIDs []string
+	var polygonArg *string
+
+	if len(req.Msg.SelectedParcelIds) > 1 {
+		candidateIDs = req.Msg.SelectedParcelIds[1:]
+	} else {
+		if p := req.Msg.GetWktPolygon(); p != "" {
+			polygonArg = &p
+		}
+	}
+
+	var startTime, endTime *time.Time
+	if tr := req.Msg.GetTimeRange(); tr != nil {
+		if st := tr.GetStartTime(); st != nil {
+			t := st.AsTime()
+			startTime = &t
+		}
+		if et := tr.GetEndTime(); et != nil {
+			t := et.AsTime()
+			endTime = &t
+		}
+	}
+
+	parcelsMap, err := s.fetchParcelsForComps(ctx, subjectID, candidateIDs, polygonArg, startTime, endTime, req.Msg.Criteria, true)
+	if err != nil {
+		s.logger.Error("failed to fetch parcels for sales comps", slog.Any("error", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("database query error"))
+	}
+
+	subject, ok := parcelsMap[subjectID]
+	if !ok {
+		s.logger.Warn("subject parcel not found in database", slog.String("subject_id", subjectID))
+		return connect.NewResponse(&parcelsv1.GetSalesComparablesResponse{
+			Parcels: make(map[string]*parcelsv1.SaleComparableParcel),
+		}), nil
+	}
+
+	resParcels := make(map[string]*parcelsv1.SaleComparableParcel)
+
+	for id, cand := range parcelsMap {
+		if id == subjectID {
+			continue
+		}
+
+		if cand.SaleTime == nil || cand.SalePrice == nil {
+			continue
+		}
+
+		matched := true
+		var attrs []*parcelsv1.ComparableAttribute
+
+		for _, crit := range req.Msg.Criteria {
+			if crit == nil {
+				continue
+			}
+
+			attr := crit.GetAttribute()
+			numVal, isNum := getNumericalValue(cand, attr)
+			if isNum {
+				subNumVal, _ := getNumericalValue(subject, attr)
+				if numVal == nil || subNumVal == nil {
+					matched = false
+					break
+				}
+				diff := math.Abs(*numVal - *subNumVal)
+				if diff > crit.GetNumericalTolerance() {
+					matched = false
+					break
+				}
+				attrs = append(attrs, &parcelsv1.ComparableAttribute{
+					Attribute:      attr,
+					NumericalValue: numVal,
+				})
+			} else {
+				if !checkCategoricalMatch(subject, cand, attr, crit.GetCategoricalTolerance()) {
+					matched = false
+					break
+				}
+				catStr := getCategoricalValueString(cand, attr)
+				attrs = append(attrs, &parcelsv1.ComparableAttribute{
+					Attribute:        attr,
+					CategoricalValue: catStr,
+				})
+			}
+		}
+
+		if matched {
+			resParcels[id] = &parcelsv1.SaleComparableParcel{
+				ParcelId:         cand.ParcelID,
+				AddressId:        cand.AddressID,
+				FormattedAddress: cand.FormattedAddress,
+				SaleTime:         timestamppb.New(*cand.SaleTime),
+				SalePrice:        *cand.SalePrice,
+				Attributes:       attrs,
+			}
+		}
+	}
+
+	return connect.NewResponse(&parcelsv1.GetSalesComparablesResponse{
+		Parcels: resParcels,
+	}), nil
 }
