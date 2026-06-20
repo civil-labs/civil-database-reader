@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"strings"
 	"time"
 
@@ -512,6 +511,7 @@ type CompParcelInfo struct {
 	ZoningIDs           []string
 	ImprovementAreaSqFt float64
 	YearBuilt           *int32
+	EffectiveYearBuilt  *int32
 	Bedrooms            int32
 	Bathrooms           int32
 	Units               int32
@@ -523,7 +523,6 @@ type CompParcelInfo struct {
 
 func (s *ParcelServer) fetchParcelsForComps(
 	ctx context.Context,
-	subjectID string,
 	candidateIDs []string,
 	wktPolygon *string,
 	startTime *time.Time,
@@ -552,25 +551,27 @@ func (s *ParcelServer) fetchParcelsForComps(
 	}
 
 	var (
-		parcelID           string
-		address            *string
-		addressID          *string
-		landAreaSqM        *float64
-		frontageM          *float64
-		depthM             *float64
-		landUseID          *string
-		zoningIDs          []string
-		improvementIDs     []string
-		improvementTypeIDs []string
-		conditionIDs       []string
-		totalAreaSqM       float64
-		totalBathrooms     int32
-		totalBedrooms      int32
-		totalUnits         int32
-		oldestYearBuilt    *int32
-		newestYearBuilt    *int32
-		saleTime           *time.Time
-		salePrice          *string
+		parcelID                 string
+		address                  *string
+		addressID                *string
+		landAreaSqM              *float64
+		frontageM                *float64
+		depthM                   *float64
+		landUseID                *string
+		zoningIDs                []string
+		improvementIDs           []string
+		improvementTypeIDs       []string
+		conditionIDs             []string
+		totalAreaSqM             float64
+		totalBathrooms           int32
+		totalBedrooms            int32
+		totalUnits               int32
+		oldestYearBuilt          *int32
+		newestYearBuilt          *int32
+		oldestEffectiveYearBuilt *int32
+		newestEffectiveYearBuilt *int32
+		saleTime                 *time.Time
+		salePrice                *string
 	)
 
 	var scanDest = []any{
@@ -614,7 +615,8 @@ func (s *ParcelServer) fetchParcelsForComps(
 			}
 
 		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_AREA_SQ_FT,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR_BUILT,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_EFFECTIVE_YEAR_BUILT,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BEDROOMS,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BATHROOMS,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_UNITS,
@@ -633,7 +635,9 @@ func (s *ParcelServer) fetchParcelsForComps(
                             COALESCE(SUM(attr.bedrooms), 0) AS total_bedrooms,
                             COALESCE(SUM(attr.units), 0) AS total_units,
                             MIN(attr.year_built) AS oldest_year_built,
-                            MAX(attr.year_built) AS newest_year_built
+                            MAX(attr.year_built) AS newest_year_built,
+                            MIN(NULLIF(attr.properties->>'effective_year_built', '')::int) AS oldest_effective_year_built,
+                            MAX(NULLIF(attr.properties->>'effective_year_built', '')::int) AS newest_effective_year_built
                         FROM parcel_improvements pi
                         JOIN improvements imp ON pi.improvement_id = imp.improvement_id
                         LEFT JOIN improvement_attributes attr ON imp.improvement_id = attr.improvement_id
@@ -652,6 +656,8 @@ func (s *ParcelServer) fetchParcelsForComps(
 					"COALESCE(imp_agg.total_units, 0)",
 					"imp_agg.oldest_year_built",
 					"imp_agg.newest_year_built",
+					"imp_agg.oldest_effective_year_built",
+					"imp_agg.newest_effective_year_built",
 				)
 				scanDest = append(scanDest,
 					&improvementIDs,
@@ -663,6 +669,8 @@ func (s *ParcelServer) fetchParcelsForComps(
 					&totalUnits,
 					&oldestYearBuilt,
 					&newestYearBuilt,
+					&oldestEffectiveYearBuilt,
+					&newestEffectiveYearBuilt,
 				)
 				joinedImprovements = true
 			}
@@ -678,8 +686,8 @@ func (s *ParcelServer) fetchParcelsForComps(
                     rpt.transfer_amount::numeric(19,4)::text AS sale_price
                 FROM real_property_transfer_party_parcels rtpp
                 JOIN real_property_transfers rpt ON rtpp.real_property_transfer_id = rpt.real_property_transfer_id
-                WHERE ($4::timestamptz IS NULL OR rpt.transfer_timestamp >= $4::timestamptz)
-                  AND ($5::timestamptz IS NULL OR rpt.transfer_timestamp <= $5::timestamptz)
+                WHERE ($3::timestamptz IS NULL OR rpt.transfer_timestamp >= $3::timestamptz)
+                  AND ($4::timestamptz IS NULL OR rpt.transfer_timestamp <= $4::timestamptz)
                 ORDER BY rtpp.parcel_id, rpt.transfer_timestamp DESC
             ) sales_agg ON p.parcel_id = sales_agg.parcel_id`)
 		selectFields = append(selectFields, "sales_agg.transfer_timestamp", "sales_agg.sale_price")
@@ -693,8 +701,7 @@ func (s *ParcelServer) fetchParcelsForComps(
         %s
         WHERE NOT p.is_voided
           AND (
-            (p.public_id = $3::uuid)
-            OR ($1::uuid[] IS NOT NULL AND p.public_id = ANY($1::uuid[]))
+            ($1::uuid[] IS NOT NULL AND p.public_id = ANY($1::uuid[]))
             OR ($1::uuid[] IS NULL AND $2::text IS NOT NULL AND ST_Intersects(pg.geom_web, ST_GeomFromText($2, 4326)))
           )
     `, strings.Join(selectFields, ",\n"), strings.Join(joins, "\n"))
@@ -706,7 +713,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 		candidateIDsArg = &candidateIDs
 	}
 
-	rows, err := s.db.Query(ctx, query, candidateIDsArg, wktPolygon, subjectID, startTime, endTime)
+	rows, err := s.db.Query(ctx, query, candidateIDsArg, wktPolygon, startTime, endTime)
 	if err != nil {
 		s.logger.Error("failed to query parcels for comps", slog.Any("error", err))
 		return nil, fmt.Errorf("failed to retrieve comp parcel data: %w", err)
@@ -744,6 +751,13 @@ func (s *ParcelServer) fetchParcelsForComps(
 			yearBuilt = oldestYearBuilt
 		}
 
+		var effectiveYearBuilt *int32
+		if newestEffectiveYearBuilt != nil {
+			effectiveYearBuilt = newestEffectiveYearBuilt
+		} else {
+			effectiveYearBuilt = oldestEffectiveYearBuilt
+		}
+
 		if zoningIDs == nil {
 			zoningIDs = []string{}
 		}
@@ -774,6 +788,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 			ZoningIDs:           zoningIDs,
 			ImprovementAreaSqFt: totalAreaSqFt,
 			YearBuilt:           yearBuilt,
+			EffectiveYearBuilt:  effectiveYearBuilt,
 			Bedrooms:            totalBedrooms,
 			Bathrooms:           totalBathrooms,
 			Units:               totalUnits,
@@ -802,11 +817,17 @@ func getNumericalValue(p *CompParcelInfo, attr parcelsv1.ParcelAttribute) (*floa
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_AREA_SQ_FT:
 		val := p.ImprovementAreaSqFt
 		return &val, true
-	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR:
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR_BUILT:
 		if p.YearBuilt == nil {
 			return nil, true
 		}
 		val := float64(*p.YearBuilt)
+		return &val, true
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_EFFECTIVE_YEAR_BUILT:
+		if p.EffectiveYearBuilt == nil {
+			return nil, true
+		}
+		val := float64(*p.EffectiveYearBuilt)
 		return &val, true
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BEDROOMS:
 		val := float64(p.Bedrooms)
@@ -821,48 +842,28 @@ func getNumericalValue(p *CompParcelInfo, attr parcelsv1.ParcelAttribute) (*floa
 	return nil, false
 }
 
-func checkCategoricalMatch(sub *CompParcelInfo, cand *CompParcelInfo, attr parcelsv1.ParcelAttribute, tolerance []string) bool {
+func checkCategoricalMatch(cand *CompParcelInfo, attr parcelsv1.ParcelAttribute, tolerance []string) bool {
 	switch attr {
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_LAND_USE_ID:
 		candVal := ""
 		if cand.LandUseID != nil {
 			candVal = *cand.LandUseID
 		}
-		if len(tolerance) > 0 {
-			for _, t := range tolerance {
-				if t == candVal {
-					return true
-				}
+		for _, t := range tolerance {
+			if t == candVal {
+				return true
 			}
-			return false
-		} else {
-			subVal := ""
-			if sub.LandUseID != nil {
-				subVal = *sub.LandUseID
-			}
-			return candVal == subVal
 		}
+		return false
 
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_ZONING_ID:
-		if len(tolerance) > 0 {
-			return sliceOverlap(cand.ZoningIDs, tolerance)
-		} else {
-			return sliceOverlap(cand.ZoningIDs, sub.ZoningIDs)
-		}
+		return sliceOverlap(cand.ZoningIDs, tolerance)
 
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID:
-		if len(tolerance) > 0 {
-			return sliceOverlap(cand.ConditionIDs, tolerance)
-		} else {
-			return sliceOverlap(cand.ConditionIDs, sub.ConditionIDs)
-		}
+		return sliceOverlap(cand.ConditionIDs, tolerance)
 
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
-		if len(tolerance) > 0 {
-			return sliceOverlap(cand.ImprovementTypeIDs, tolerance)
-		} else {
-			return sliceOverlap(cand.ImprovementTypeIDs, sub.ImprovementTypeIDs)
-		}
+		return sliceOverlap(cand.ImprovementTypeIDs, tolerance)
 	}
 	return false
 }
@@ -913,46 +914,30 @@ func (s *ParcelServer) GetEquityComparables(
 		slog.Any("selected_parcel_ids", req.Msg.SelectedParcelIds),
 		slog.String("wkt_polygon", req.Msg.WktPolygon))
 
-	if len(req.Msg.SelectedParcelIds) == 0 {
-		return connect.NewResponse(&parcelsv1.GetEquityComparablesResponse{
-			Parcels: make(map[string]*parcelsv1.EquityComparableParcel),
-		}), nil
+	if len(req.Msg.SelectedParcelIds) == 0 && req.Msg.GetWktPolygon() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("either selected_parcel_ids or wkt_polygon must be provided"))
 	}
-
-	subjectID := req.Msg.SelectedParcelIds[0]
 
 	var candidateIDs []string
 	var polygonArg *string
 
-	if len(req.Msg.SelectedParcelIds) > 1 {
-		candidateIDs = req.Msg.SelectedParcelIds[1:]
+	if len(req.Msg.SelectedParcelIds) > 0 {
+		candidateIDs = req.Msg.SelectedParcelIds
 	} else {
 		if p := req.Msg.GetWktPolygon(); p != "" {
 			polygonArg = &p
 		}
 	}
 
-	parcelsMap, err := s.fetchParcelsForComps(ctx, subjectID, candidateIDs, polygonArg, nil, nil, req.Msg.Criteria, false)
+	parcelsMap, err := s.fetchParcelsForComps(ctx, candidateIDs, polygonArg, nil, nil, req.Msg.Criteria, false)
 	if err != nil {
 		s.logger.Error("failed to fetch parcels for equity comps", slog.Any("error", err))
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("database query error"))
 	}
 
-	subject, ok := parcelsMap[subjectID]
-	if !ok {
-		s.logger.Warn("subject parcel not found in database", slog.String("subject_id", subjectID))
-		return connect.NewResponse(&parcelsv1.GetEquityComparablesResponse{
-			Parcels: make(map[string]*parcelsv1.EquityComparableParcel),
-		}), nil
-	}
-
 	resParcels := make(map[string]*parcelsv1.EquityComparableParcel)
 
 	for id, cand := range parcelsMap {
-		if id == subjectID {
-			continue
-		}
-
 		matched := true
 		var attrs []*parcelsv1.ComparableAttribute
 
@@ -964,24 +949,32 @@ func (s *ParcelServer) GetEquityComparables(
 			attr := crit.GetAttribute()
 			numVal, isNum := getNumericalValue(cand, attr)
 			if isNum {
-				subNumVal, _ := getNumericalValue(subject, attr)
-				if numVal == nil || subNumVal == nil {
+				if numVal == nil {
 					matched = false
 					break
 				}
-				diff := math.Abs(*numVal - *subNumVal)
-				if diff > crit.GetNumericalTolerance() {
-					matched = false
-					break
+				if crit.MinNumericalTolerance != nil {
+					if *numVal < *crit.MinNumericalTolerance {
+						matched = false
+						break
+					}
+				}
+				if crit.MaxNumericalTolerance != nil {
+					if *numVal > *crit.MaxNumericalTolerance {
+						matched = false
+						break
+					}
 				}
 				attrs = append(attrs, &parcelsv1.ComparableAttribute{
 					Attribute:      attr,
 					NumericalValue: numVal,
 				})
 			} else {
-				if !checkCategoricalMatch(subject, cand, attr, crit.GetCategoricalTolerance()) {
-					matched = false
-					break
+				if len(crit.GetCategoricalTolerance()) > 0 {
+					if !checkCategoricalMatch(cand, attr, crit.GetCategoricalTolerance()) {
+						matched = false
+						break
+					}
 				}
 				catStr := getCategoricalValueString(cand, attr)
 				attrs = append(attrs, &parcelsv1.ComparableAttribute{
@@ -1015,19 +1008,15 @@ func (s *ParcelServer) GetSalesComparables(
 		slog.Any("selected_parcel_ids", req.Msg.SelectedParcelIds),
 		slog.String("wkt_polygon", req.Msg.WktPolygon))
 
-	if len(req.Msg.SelectedParcelIds) == 0 {
-		return connect.NewResponse(&parcelsv1.GetSalesComparablesResponse{
-			Parcels: make(map[string]*parcelsv1.SaleComparableParcel),
-		}), nil
+	if len(req.Msg.SelectedParcelIds) == 0 && req.Msg.GetWktPolygon() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("either selected_parcel_ids or wkt_polygon must be provided"))
 	}
-
-	subjectID := req.Msg.SelectedParcelIds[0]
 
 	var candidateIDs []string
 	var polygonArg *string
 
-	if len(req.Msg.SelectedParcelIds) > 1 {
-		candidateIDs = req.Msg.SelectedParcelIds[1:]
+	if len(req.Msg.SelectedParcelIds) > 0 {
+		candidateIDs = req.Msg.SelectedParcelIds
 	} else {
 		if p := req.Msg.GetWktPolygon(); p != "" {
 			polygonArg = &p
@@ -1046,27 +1035,15 @@ func (s *ParcelServer) GetSalesComparables(
 		}
 	}
 
-	parcelsMap, err := s.fetchParcelsForComps(ctx, subjectID, candidateIDs, polygonArg, startTime, endTime, req.Msg.Criteria, true)
+	parcelsMap, err := s.fetchParcelsForComps(ctx, candidateIDs, polygonArg, startTime, endTime, req.Msg.Criteria, true)
 	if err != nil {
 		s.logger.Error("failed to fetch parcels for sales comps", slog.Any("error", err))
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("database query error"))
 	}
 
-	subject, ok := parcelsMap[subjectID]
-	if !ok {
-		s.logger.Warn("subject parcel not found in database", slog.String("subject_id", subjectID))
-		return connect.NewResponse(&parcelsv1.GetSalesComparablesResponse{
-			Parcels: make(map[string]*parcelsv1.SaleComparableParcel),
-		}), nil
-	}
-
 	resParcels := make(map[string]*parcelsv1.SaleComparableParcel)
 
 	for id, cand := range parcelsMap {
-		if id == subjectID {
-			continue
-		}
-
 		if cand.SaleTime == nil || cand.SalePrice == nil {
 			continue
 		}
@@ -1082,24 +1059,32 @@ func (s *ParcelServer) GetSalesComparables(
 			attr := crit.GetAttribute()
 			numVal, isNum := getNumericalValue(cand, attr)
 			if isNum {
-				subNumVal, _ := getNumericalValue(subject, attr)
-				if numVal == nil || subNumVal == nil {
+				if numVal == nil {
 					matched = false
 					break
 				}
-				diff := math.Abs(*numVal - *subNumVal)
-				if diff > crit.GetNumericalTolerance() {
-					matched = false
-					break
+				if crit.MinNumericalTolerance != nil {
+					if *numVal < *crit.MinNumericalTolerance {
+						matched = false
+						break
+					}
+				}
+				if crit.MaxNumericalTolerance != nil {
+					if *numVal > *crit.MaxNumericalTolerance {
+						matched = false
+						break
+					}
 				}
 				attrs = append(attrs, &parcelsv1.ComparableAttribute{
 					Attribute:      attr,
 					NumericalValue: numVal,
 				})
 			} else {
-				if !checkCategoricalMatch(subject, cand, attr, crit.GetCategoricalTolerance()) {
-					matched = false
-					break
+				if len(crit.GetCategoricalTolerance()) > 0 {
+					if !checkCategoricalMatch(cand, attr, crit.GetCategoricalTolerance()) {
+						matched = false
+						break
+					}
 				}
 				catStr := getCategoricalValueString(cand, attr)
 				attrs = append(attrs, &parcelsv1.ComparableAttribute{
