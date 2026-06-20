@@ -713,7 +713,12 @@ func (s *ParcelServer) fetchParcelsForComps(
 		candidateIDsArg = &candidateIDs
 	}
 
-	rows, err := s.db.Query(ctx, query, candidateIDsArg, wktPolygon, startTime, endTime)
+	var queryArgs = []any{candidateIDsArg, wktPolygon}
+	if isSales {
+		queryArgs = append(queryArgs, startTime, endTime)
+	}
+
+	rows, err := s.db.Query(ctx, query, queryArgs...)
 	if err != nil {
 		s.logger.Error("failed to query parcels for comps", slog.Any("error", err))
 		return nil, fmt.Errorf("failed to retrieve comp parcel data: %w", err)
