@@ -521,6 +521,10 @@ type CompParcelInfo struct {
 	SalePrice           *string
 }
 
+// fetchParcelsForComps retrieves candidate parcels and their metadata attributes.
+// To maximize performance and scale efficiently, it dynamically compiles the SQL query,
+// appending SELECT columns, LEFT JOIN clauses, and row scan destinations (scanDest)
+// ONLY for the attributes specified in the criteria list or if sales information is requested.
 func (s *ParcelServer) fetchParcelsForComps(
 	ctx context.Context,
 	candidateIDs []string,
@@ -531,6 +535,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 	isSales bool,
 ) (map[string]*CompParcelInfo, error) {
 
+	// Baseline fields that are always queried for every comparable parcel
 	var selectFields = []string{
 		"p.public_id::text",
 		"LEFT(aa.formatted_address, 1024) AS safe_address",
@@ -540,16 +545,19 @@ func (s *ParcelServer) fetchParcelsForComps(
 		"pa.depth_m",
 	}
 
+	// Baseline joins required for the default parcel attributes
 	var joins = []string{
 		"LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id",
 		"LEFT JOIN addresses a ON pa.address_id = a.address_id",
 		"LEFT JOIN address_attributes aa ON a.address_id = aa.address_id",
 	}
 
+	// If filtering geographically, join on parcel_geometry to enable ST_Intersects
 	if wktPolygon != nil {
 		joins = append(joins, "LEFT JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id")
 	}
 
+	// Variables where scanned column data is stored
 	var (
 		parcelID                 string
 		address                  *string
@@ -574,6 +582,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 		salePrice                *string
 	)
 
+	// Baseline pointers matching the order of selectFields
 	var scanDest = []any{
 		&parcelID,
 		&address,
@@ -585,12 +594,14 @@ func (s *ParcelServer) fetchParcelsForComps(
 
 	var joinedImprovements, joinedZoning, joinedLandUse bool
 
+	// Dynamic Query Assembly based on the input criteria
 	for _, c := range criteria {
 		if c == nil {
 			continue
 		}
 		switch c.GetAttribute() {
 		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_LAND_USE_ID:
+			// Add land use mapping and fetch the public ID
 			if !joinedLandUse {
 				joins = append(joins, "LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id")
 				selectFields = append(selectFields, "lu.public_id::text")
@@ -599,6 +610,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 			}
 
 		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_ZONING_ID:
+			// Aggregate all unique zoning IDs for the parcel
 			if !joinedZoning {
 				joins = append(joins, `
                     LEFT JOIN (
@@ -622,6 +634,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_UNITS,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
+			// Join improvement attributes subquery to fetch size, rooms, conditions, and years built
 			if !joinedImprovements {
 				joins = append(joins, `
                     LEFT JOIN (
@@ -677,6 +690,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 		}
 	}
 
+	// For sales comparables, join real property transfers to get the latest sales transaction
 	if isSales {
 		joins = append(joins, `
             LEFT JOIN (
@@ -694,17 +708,22 @@ func (s *ParcelServer) fetchParcelsForComps(
 		scanDest = append(scanDest, &saleTime, &salePrice)
 	}
 
+	// SQL Query construction: filters either strictly by selected public IDs or geographically by ST_Intersects
+	var filterCond string
+	if len(candidateIDs) > 0 {
+		filterCond = "($1::uuid[] IS NOT NULL AND p.public_id = ANY($1::uuid[]))"
+	} else {
+		filterCond = "($1::uuid[] IS NULL AND $2::text IS NOT NULL AND ST_Intersects(pg.geom_web, ST_GeomFromText($2, 4326)))"
+	}
+
 	query := fmt.Sprintf(`
         SELECT 
             %s
         FROM parcels p
         %s
         WHERE NOT p.is_voided
-          AND (
-            ($1::uuid[] IS NOT NULL AND p.public_id = ANY($1::uuid[]))
-            OR ($1::uuid[] IS NULL AND $2::text IS NOT NULL AND ST_Intersects(pg.geom_web, ST_GeomFromText($2, 4326)))
-          )
-    `, strings.Join(selectFields, ",\n"), strings.Join(joins, "\n"))
+          AND %s
+    `, strings.Join(selectFields, ",\n"), strings.Join(joins, "\n"), filterCond)
 
 	s.logger.Debug("performing dynamic comps query", slog.String("sql", query))
 
@@ -713,6 +732,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 		candidateIDsArg = &candidateIDs
 	}
 
+	// Build exact query arguments list to prevent prepared statement parameter count mismatches (SQLSTATE 08P01)
 	var queryArgs = []any{candidateIDsArg, wktPolygon}
 	if isSales {
 		queryArgs = append(queryArgs, startTime, endTime)
@@ -733,22 +753,27 @@ func (s *ParcelServer) fetchParcelsForComps(
 			return nil, fmt.Errorf("data unmarshaling error in comps query: %w", err)
 		}
 
-		// Unit conversions
+		// Unit conversions: Convert metric database columns to imperial for the Protobuf API contract
 		var landAreaSqFt, frontageFt, depthFt *float64
 		if landAreaSqM != nil {
+			// Convert square meters to square feet (1 sq m = 10.7639 sq ft)
 			val := *landAreaSqM * 10.7639
 			landAreaSqFt = &val
 		}
 		if frontageM != nil {
+			// Convert meters to feet (1 m = 3.28084 ft)
 			val := *frontageM * 3.28084
 			frontageFt = &val
 		}
 		if depthM != nil {
+			// Convert meters to feet (1 m = 3.28084 ft)
 			val := *depthM * 3.28084
 			depthFt = &val
 		}
+		// Convert total building/improvement area to square feet
 		totalAreaSqFt := totalAreaSqM * 10.7639
 
+		// Fallback rules for year built (use newest year built, fallback to oldest)
 		var yearBuilt *int32
 		if newestYearBuilt != nil {
 			yearBuilt = newestYearBuilt
@@ -756,6 +781,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 			yearBuilt = oldestYearBuilt
 		}
 
+		// Fallback rules for effective year built (use newest, fallback to oldest)
 		var effectiveYearBuilt *int32
 		if newestEffectiveYearBuilt != nil {
 			effectiveYearBuilt = newestEffectiveYearBuilt
@@ -763,6 +789,7 @@ func (s *ParcelServer) fetchParcelsForComps(
 			effectiveYearBuilt = oldestEffectiveYearBuilt
 		}
 
+		// Prevent nil slice issues by returning empty slices instead of null in JSON response
 		if zoningIDs == nil {
 			zoningIDs = []string{}
 		}
