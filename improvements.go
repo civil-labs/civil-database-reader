@@ -83,10 +83,11 @@ func (s *APIServer) GetImprovementConditions(
 			s.logger.Error("failed to scan improvement condition", slog.Any("error", err))
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("data scanning error"))
 		}
+		depVal := depreciationModifier
 		conditions[publicID] = &improvementsv1.ImprovementCondition{
-			Id:                    publicID,
-			Name:                  name,
-			DepcreciationModifier: depreciationModifier,
+			Id:                   publicID,
+			Name:                 name,
+			DepreciationModifier: &depVal,
 		}
 	}
 
