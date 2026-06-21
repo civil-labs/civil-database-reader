@@ -6,6 +6,10 @@ github.com/civil-labs/civil-api-go v0.0.0-20260618200426-66eb38f6be74 h1:9u7evYN
 github.com/civil-labs/civil-api-go v0.0.0-20260618200426-66eb38f6be74/go.mod h1:6rNa9Fgk6fNFI7xFuf09C0jKHWzYw8J7xGXKYNICQQs=
 github.com/civil-labs/civil-api-go v0.0.0-20260619191545-a7df4693042a h1:pxvMb5KgwGvMLweSMK8t7gDnRZcqKq+D73vvt0oSV/o=
 github.com/civil-labs/civil-api-go v0.0.0-20260619191545-a7df4693042a/go.mod h1:6rNa9Fgk6fNFI7xFuf09C0jKHWzYw8J7xGXKYNICQQs=
+github.com/civil-labs/civil-api-go v0.0.0-20260621014531-0f6548d5cb02 h1:XXHfbXDwCZh0egc2VSPBThlkE4FDprE+50CcANoOsWw=
+github.com/civil-labs/civil-api-go v0.0.0-20260621014531-0f6548d5cb02/go.mod h1:6rNa9Fgk6fNFI7xFuf09C0jKHWzYw8J7xGXKYNICQQs=
+github.com/civil-labs/civil-api-go v0.0.0-20260621020533-aa10e094418f h1:afI3GTBZbfD7mLEw3ZrjdlO4K5qflvrU4DkdKLbTpWs=
+github.com/civil-labs/civil-api-go v0.0.0-20260621020533-aa10e094418f/go.mod h1:6rNa9Fgk6fNFI7xFuf09C0jKHWzYw8J7xGXKYNICQQs=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
