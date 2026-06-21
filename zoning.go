@@ -9,7 +9,7 @@ import (
 	zoningv1 "github.com/civil-labs/civil-api-go/civil/mesh/zoning/v1"
 )
 
-func (s *ParcelServer) GetZoning(
+func (s *APIServer) GetZoning(
 	ctx context.Context,
 	req *connect.Request[zoningv1.GetZoningRequest],
 ) (*connect.Response[zoningv1.GetZoningResponse], error) {

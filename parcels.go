@@ -9,16 +9,10 @@ import (
 
 	"connectrpc.com/connect"
 	parcelsv1 "github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type ParcelServer struct {
-	db     *pgxpool.Pool
-	logger *slog.Logger
-}
-
-func (s *ParcelServer) GetParcelsById(
+func (s *APIServer) GetParcelsById(
 	ctx context.Context,
 	req *connect.Request[parcelsv1.GetParcelsByIdRequest],
 ) (*connect.Response[parcelsv1.GetParcelsByIdResponse], error) {
@@ -402,7 +396,7 @@ func (s *ParcelServer) GetParcelsById(
 	return connect.NewResponse(res), nil
 }
 
-func (s *ParcelServer) UpdateParcel(
+func (s *APIServer) UpdateParcel(
 	ctx context.Context,
 	req *connect.Request[parcelsv1.UpdateParcelRequest],
 ) (*connect.Response[parcelsv1.UpdateParcelResponse], error) {
@@ -436,7 +430,7 @@ func (s *ParcelServer) UpdateParcel(
 	return connect.NewResponse(res), nil
 }
 
-func (s *ParcelServer) GetCategoricalParcelStatsById(
+func (s *APIServer) GetCategoricalParcelStatsById(
 	ctx context.Context,
 	req *connect.Request[parcelsv1.GetCategoricalParcelStatsByIdRequest],
 ) (*connect.Response[parcelsv1.GetCategoricalParcelStatsByIdResponse], error) {
@@ -468,7 +462,7 @@ func (s *ParcelServer) GetCategoricalParcelStatsById(
 	return connect.NewResponse(res), nil
 }
 
-func (s *ParcelServer) GetNumericalParcelStatsById(
+func (s *APIServer) GetNumericalParcelStatsById(
 	ctx context.Context,
 	req *connect.Request[parcelsv1.GetNumericalParcelStatsByIdRequest],
 ) (*connect.Response[parcelsv1.GetNumericalParcelStatsByIdResponse], error) {
@@ -525,7 +519,7 @@ type CompParcelInfo struct {
 // To maximize performance and scale efficiently, it dynamically compiles the SQL query,
 // appending SELECT columns, LEFT JOIN clauses, and row scan destinations (scanDest)
 // ONLY for the attributes specified in the criteria list or if sales information is requested.
-func (s *ParcelServer) fetchParcelsForComps(
+func (s *APIServer) fetchParcelsForComps(
 	ctx context.Context,
 	candidateIDs []string,
 	wktPolygon *string,
@@ -937,7 +931,7 @@ func getCategoricalValueString(p *CompParcelInfo, attr parcelsv1.ParcelAttribute
 	return nil
 }
 
-func (s *ParcelServer) GetEquityComparables(
+func (s *APIServer) GetEquityComparables(
 	ctx context.Context,
 	req *connect.Request[parcelsv1.GetEquityComparablesRequest],
 ) (*connect.Response[parcelsv1.GetEquityComparablesResponse], error) {
@@ -1031,7 +1025,7 @@ func (s *ParcelServer) GetEquityComparables(
 	}), nil
 }
 
-func (s *ParcelServer) GetSalesComparables(
+func (s *APIServer) GetSalesComparables(
 	ctx context.Context,
 	req *connect.Request[parcelsv1.GetSalesComparablesRequest],
 ) (*connect.Response[parcelsv1.GetSalesComparablesResponse], error) {

@@ -9,7 +9,7 @@ import (
 	improvementsv1 "github.com/civil-labs/civil-api-go/civil/mesh/improvements/v1"
 )
 
-func (s *ParcelServer) GetImprovementTypes(
+func (s *APIServer) GetImprovementTypes(
 	ctx context.Context,
 	req *connect.Request[improvementsv1.GetImprovementTypesRequest],
 ) (*connect.Response[improvementsv1.GetImprovementTypesResponse], error) {
@@ -53,7 +53,7 @@ func (s *ParcelServer) GetImprovementTypes(
 	}), nil
 }
 
-func (s *ParcelServer) GetImprovementConditions(
+func (s *APIServer) GetImprovementConditions(
 	ctx context.Context,
 	req *connect.Request[improvementsv1.GetImprovementConditionsRequest],
 ) (*connect.Response[improvementsv1.GetImprovementConditionsResponse], error) {

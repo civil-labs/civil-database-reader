@@ -21,6 +21,11 @@ import (
 	"github.com/civil-labs/civil-api-go/civil/mesh/zoning/v1/zoningv1connect"
 )
 
+type APIServer struct {
+	db     *pgxpool.Pool
+	logger *slog.Logger
+}
+
 func main() {
 	// Create app context, logger, config, and db pool first
 	ctxApp, cancelApp := context.WithCancel(context.Background())
@@ -62,7 +67,7 @@ func main() {
 	}
 
 	// Initialize the handlers and http server
-	srv := &ParcelServer{
+	srv := &APIServer{
 		db:     dbPool,
 		logger: logger,
 	}

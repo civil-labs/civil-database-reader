@@ -9,7 +9,7 @@ import (
 	landusesv1 "github.com/civil-labs/civil-api-go/civil/mesh/landuses/v1"
 )
 
-func (s *ParcelServer) GetLandUses(
+func (s *APIServer) GetLandUses(
 	ctx context.Context,
 	req *connect.Request[landusesv1.GetLandUsesRequest],
 ) (*connect.Response[landusesv1.GetLandUsesResponse], error) {
@@ -58,7 +58,7 @@ func (s *ParcelServer) GetLandUses(
 	}), nil
 }
 
-func (s *ParcelServer) GetLandUseTypes(
+func (s *APIServer) GetLandUseTypes(
 	ctx context.Context,
 	req *connect.Request[landusesv1.GetLandUseTypesRequest],
 ) (*connect.Response[landusesv1.GetLandUseTypesResponse], error) {
