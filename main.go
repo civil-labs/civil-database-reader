@@ -18,6 +18,7 @@ import (
 	"github.com/civil-labs/civil-api-go/civil/mesh/improvements/v1/improvementsv1connect"
 	"github.com/civil-labs/civil-api-go/civil/mesh/landuses/v1/landusesv1connect"
 	"github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1/parcelsv1connect"
+	"github.com/civil-labs/civil-api-go/civil/mesh/zoning/v1/zoningv1connect"
 )
 
 func main() {
@@ -75,6 +76,9 @@ func main() {
 
 	path3, handler3 := landusesv1connect.NewLandUsesServiceHandler(srv)
 	mux.Handle(path3, handler3)
+
+	path4, handler4 := zoningv1connect.NewZoningServiceHandler(srv)
+	mux.Handle(path4, handler4)
 
 	// Pass the fully qualified name of the service so the health check
 	// can report on this specific service, as well as the global server status.
