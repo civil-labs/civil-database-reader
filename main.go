@@ -16,6 +16,7 @@ import (
 	"connectrpc.com/grpchealth"
 
 	"github.com/civil-labs/civil-api-go/civil/mesh/improvements/v1/improvementsv1connect"
+	"github.com/civil-labs/civil-api-go/civil/mesh/landuses/v1/landusesv1connect"
 	"github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1/parcelsv1connect"
 )
 
@@ -71,6 +72,9 @@ func main() {
 
 	path2, handler2 := improvementsv1connect.NewImprovementsServiceHandler(srv)
 	mux.Handle(path2, handler2)
+
+	path3, handler3 := landusesv1connect.NewLandUsesServiceHandler(srv)
+	mux.Handle(path3, handler3)
 
 	// Pass the fully qualified name of the service so the health check
 	// can report on this specific service, as well as the global server status.
