@@ -84,8 +84,10 @@ func (s *APIServer) GetParcelsById(
 			imp_agg.market_improvement_value,
 			imp_agg.assessed_improvement_value,
 
-            pa.properties::text
+            pa.properties::text,
+            COALESCE(pg.feature_id, 0)
         FROM parcels p
+        LEFT JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id
         LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
         LEFT JOIN addresses a ON pa.address_id = a.address_id
         LEFT JOIN address_attributes aa ON a.address_id = aa.address_id
@@ -230,6 +232,7 @@ func (s *APIServer) GetParcelsById(
 			assessedImpValue *string
 
 			properties *string
+			featureID  int64
 		)
 
 		// 2. Scan directly into the pointers
@@ -271,6 +274,7 @@ func (s *APIServer) GetParcelsById(
 			&assessedImpValue,
 
 			&properties,
+			&featureID,
 		)
 
 		s.logger.Debug("scanned row", slog.Any("parcelId", parcelID))
@@ -358,6 +362,7 @@ func (s *APIServer) GetParcelsById(
 		// Assuming your proto generates pointers (*string, *float64) for optional fields
 		parcels[parcelID] = &parcelsv1.Parcel{
 			ParcelId:            parcelID,
+			FeatureId:           featureID,
 			FormattedAddress:    address,
 			AddressId:           addressID,
 			PrimaryOwnerName:    primaryOwnerName,
@@ -1134,5 +1139,260 @@ func (s *APIServer) GetSalesComparables(
 
 	return connect.NewResponse(&parcelsv1.GetSalesComparablesResponse{
 		Parcels: resParcels,
+	}), nil
+}
+
+func (s *APIServer) GetParcelByFeatureId(
+	ctx context.Context,
+	req *connect.Request[parcelsv1.GetParcelByFeatureIdRequest],
+) (*connect.Response[parcelsv1.GetParcelByFeatureIdResponse], error) {
+
+	s.logger.Debug("received GetParcelByFeatureId request", slog.Int64("featureId", req.Msg.FeatureId),
+		slog.Any("neighborhoodDefinitionId", req.Msg.NeighborhoodDefinitionId),
+		slog.Any("valuationId", req.Msg.ValuationId))
+
+	var neighborhoodDefIDArg *string
+	if defID := req.Msg.GetNeighborhoodDefinitionId(); defID != "" {
+		neighborhoodDefIDArg = &defID
+	}
+
+	var valuationIDArg *string
+	if valID := req.Msg.GetValuationId(); valID != "" {
+		valuationIDArg = &valID
+	}
+
+	query := `
+        SELECT 
+            p.public_id::text,
+            LEFT(aa.formatted_address, 1024) AS safe_address,
+            a.public_id::text,
+            LEFT(parties_agg.primary_owner_name, 128) AS safe_primary_owner_name,
+            LEFT(parties_agg.primary_owner_address, 256) AS safe_primary_owner_address,
+            parties_agg.party_ids,
+            pa.land_area_sq_m,
+            pa.frontage_m,
+            pa.depth_m,
+            lu.public_id::text,
+            n.public_id::text,
+
+            aff.zoning_public_ids,
+
+			pv_agg.market_land_value,
+			pv_agg.assessed_land_value,
+
+            pa.properties::text,
+            pg.feature_id
+        FROM parcels p
+        JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id
+        LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
+        LEFT JOIN addresses a ON pa.address_id = a.address_id
+        LEFT JOIN address_attributes aa ON a.address_id = aa.address_id
+        LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
+
+        -- New Party / Fractional Ownership Aggregation
+        LEFT JOIN (
+            SELECT 
+                pp.parcel_id,
+                -- Aggregate all unique party IDs, ordered by who holds the largest share
+                array_agg(pty.public_id::text ORDER BY pp.ownership_share DESC, pty.party_id ASC) AS party_ids,
+                -- Grab the name and address of the party with the highest ownership share to act as the "Primary"
+                (array_agg(pa_attr.name ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_name,
+                (array_agg(p_aa.formatted_address ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_address
+            FROM parcel_parties pp
+            JOIN parties pty ON pp.party_id = pty.party_id
+            LEFT JOIN party_attributes pa_attr ON pty.party_id = pa_attr.party_id
+            LEFT JOIN address_attributes p_aa ON pa_attr.address_id = p_aa.address_id
+            GROUP BY pp.parcel_id
+        ) parties_agg ON p.parcel_id = parties_agg.parcel_id
+
+        -- Neighborhood Definition Joins
+        LEFT JOIN neighborhood_definitions nd 
+            ON nd.public_id = $2::uuid
+        LEFT JOIN parcel_neighborhood_definitions pnd 
+            ON p.parcel_id = pnd.parcel_id 
+            AND pnd.neighborhood_definition_id = nd.neighborhood_definition_id
+        LEFT JOIN neighborhoods n 
+            ON pnd.neighborhood_id = n.neighborhood_id
+
+        -- Aggregated Affordances Subquery
+        LEFT JOIN (
+            SELECT 
+                parcel_id,
+                array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_public_ids
+            FROM parcel_affordances pa
+			LEFT JOIN zoning z ON pa.zoning_id = z.zoning_id
+            GROUP BY parcel_id
+        ) aff ON p.parcel_id = aff.parcel_id
+
+        -- Aggregated Parcel Valuations Subquery
+        LEFT JOIN (
+            SELECT 
+                pv.parcel_id,
+                pv.market_value::numeric(19,4)::text AS market_land_value,
+                pv.assessed_value::numeric(19,4)::text AS assessed_land_value
+            FROM parcel_valuations pv
+            JOIN valuations v ON pv.valuation_id = v.valuation_id
+            WHERE $3::uuid IS NOT NULL AND v.public_id = $3::uuid
+        ) pv_agg ON p.parcel_id = pv_agg.parcel_id
+
+        WHERE pg.feature_id = $1 AND NOT p.is_voided
+        LIMIT 1
+    `
+
+	rows, err := s.db.Query(ctx, query, req.Msg.FeatureId, neighborhoodDefIDArg, valuationIDArg)
+	if err != nil {
+		s.logger.Error("failed to query parcel by feature ID", slog.Any("error", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve parcel data"))
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("parcel not found for feature ID %d", req.Msg.FeatureId))
+	}
+
+	var (
+		parcelID            string
+		address             *string
+		addressID           *string
+		primaryOwnerName    *string
+		primaryOwnerAddress *string
+		partyIDs            []string
+		landAreaSqM         *float64
+		frontageM           *float64
+		depthM              *float64
+		landUseID           *string
+		neighborhoodID      *string
+
+		zoningIDs         []string
+		marketLandValue   *string
+		assessedLandValue *string
+
+		properties *string
+		featureID  int64
+	)
+
+	err = rows.Scan(
+		&parcelID,
+		&address,
+		&addressID,
+		&primaryOwnerName,
+		&primaryOwnerAddress,
+		&partyIDs,
+		&landAreaSqM,
+		&frontageM,
+		&depthM,
+		&landUseID,
+		&neighborhoodID,
+
+		&zoningIDs,
+
+		&marketLandValue,
+		&assessedLandValue,
+
+		&properties,
+		&featureID,
+	)
+
+	if err != nil {
+		s.logger.Error("failed to scan parcel row by feature ID", "error", err, "featureId", req.Msg.FeatureId)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("data unmarshaling error"))
+	}
+
+	var landAreaSqFt, frontageFt, depthFt *float64
+
+	if landAreaSqM != nil {
+		val := *landAreaSqM * 10.7639
+		landAreaSqFt = &val
+	}
+
+	if frontageM != nil {
+		val := *frontageM * 3.28084
+		frontageFt = &val
+	}
+
+	if depthM != nil {
+		val := *depthM * 3.28084
+		depthFt = &val
+	}
+
+	if zoningIDs == nil {
+		zoningIDs = []string{}
+	}
+
+	parcel := &parcelsv1.SimpleParcel{
+		ParcelId:            parcelID,
+		FeatureId:           featureID,
+		FormattedAddress:    address,
+		AddressId:           addressID,
+		PrimaryOwnerName:    primaryOwnerName,
+		PrimaryOwnerAddress: primaryOwnerAddress,
+		PartyIds:            partyIDs,
+		LandUseId:           landUseID,
+		NeighborhoodId:      neighborhoodID,
+		LandAreaSqFt:        landAreaSqFt,
+		FrontageFt:          frontageFt,
+		DepthFt:             depthFt,
+		ZoningIds:           zoningIDs,
+		MarketLandValue:     marketLandValue,
+		AssessedLandValue:   assessedLandValue,
+		Properties:          properties,
+	}
+
+	if err := rows.Err(); err != nil {
+		s.logger.Error("error iterating parcel row by feature ID", slog.Any("error", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to process parcel data"))
+	}
+
+	return connect.NewResponse(&parcelsv1.GetParcelByFeatureIdResponse{
+		Parcel: parcel,
+	}), nil
+}
+
+func (s *APIServer) GetParcelIdsByFeatureId(
+	ctx context.Context,
+	req *connect.Request[parcelsv1.GetParcelIdsByFeatureIdRequest],
+) (*connect.Response[parcelsv1.GetParcelIdsByFeatureIdResponse], error) {
+
+	s.logger.Debug("received GetParcelIdsByFeatureId request", slog.Any("featureIds", req.Msg.FeatureId))
+
+	featureIDs := req.Msg.FeatureId
+	if len(featureIDs) == 0 {
+		return connect.NewResponse(&parcelsv1.GetParcelIdsByFeatureIdResponse{
+			ParcelIds: make(map[int64]string),
+		}), nil
+	}
+
+	query := `
+		SELECT pg.feature_id, p.public_id::text
+		FROM parcel_geometry pg
+		JOIN parcels p ON pg.parcel_id = p.parcel_id
+		WHERE pg.feature_id = ANY($1::bigint[]) AND NOT p.is_voided
+	`
+
+	rows, err := s.db.Query(ctx, query, featureIDs)
+	if err != nil {
+		s.logger.Error("failed to query parcel IDs by feature ID", slog.Any("error", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve parcel IDs"))
+	}
+	defer rows.Close()
+
+	parcelIDsMap := make(map[int64]string)
+	for rows.Next() {
+		var featureID int64
+		var parcelUUID string
+		if err := rows.Scan(&featureID, &parcelUUID); err != nil {
+			s.logger.Error("failed to scan parcel ID row", slog.Any("error", err))
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("data unmarshaling error"))
+		}
+		parcelIDsMap[featureID] = parcelUUID
+	}
+
+	if err := rows.Err(); err != nil {
+		s.logger.Error("error iterating parcel ID rows", slog.Any("error", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to process parcel ID stream"))
+	}
+
+	return connect.NewResponse(&parcelsv1.GetParcelIdsByFeatureIdResponse{
+		ParcelIds: parcelIDsMap,
 	}), nil
 }
