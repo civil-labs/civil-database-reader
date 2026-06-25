@@ -1190,9 +1190,8 @@ func (s *APIServer) GetParcelByFeatureId(
         LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
 
         -- New Party / Fractional Ownership Aggregation
-        LEFT JOIN (
+        LEFT JOIN LATERAL (
             SELECT 
-                pp.parcel_id,
                 -- Aggregate all unique party IDs, ordered by who holds the largest share
                 array_agg(pty.public_id::text ORDER BY pp.ownership_share DESC, pty.party_id ASC) AS party_ids,
                 -- Grab the name and address of the party with the highest ownership share to act as the "Primary"
@@ -1202,8 +1201,8 @@ func (s *APIServer) GetParcelByFeatureId(
             JOIN parties pty ON pp.party_id = pty.party_id
             LEFT JOIN party_attributes pa_attr ON pty.party_id = pa_attr.party_id
             LEFT JOIN address_attributes p_aa ON pa_attr.address_id = p_aa.address_id
-            GROUP BY pp.parcel_id
-        ) parties_agg ON p.parcel_id = parties_agg.parcel_id
+            WHERE pp.parcel_id = p.parcel_id
+        ) parties_agg ON TRUE
 
         -- Neighborhood Definition Joins
         LEFT JOIN neighborhood_definitions nd 
@@ -1215,25 +1214,24 @@ func (s *APIServer) GetParcelByFeatureId(
             ON pnd.neighborhood_id = n.neighborhood_id
 
         -- Aggregated Affordances Subquery
-        LEFT JOIN (
+        LEFT JOIN LATERAL (
             SELECT 
-                parcel_id,
                 array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_public_ids
             FROM parcel_affordances pa
 			LEFT JOIN zoning z ON pa.zoning_id = z.zoning_id
-            GROUP BY parcel_id
-        ) aff ON p.parcel_id = aff.parcel_id
+            WHERE pa.parcel_id = p.parcel_id
+        ) aff ON TRUE
 
         -- Aggregated Parcel Valuations Subquery
-        LEFT JOIN (
+        LEFT JOIN LATERAL (
             SELECT 
-                pv.parcel_id,
                 pv.market_value::numeric(19,4)::text AS market_land_value,
                 pv.assessed_value::numeric(19,4)::text AS assessed_land_value
             FROM parcel_valuations pv
             JOIN valuations v ON pv.valuation_id = v.valuation_id
-            WHERE $3::uuid IS NOT NULL AND v.public_id = $3::uuid
-        ) pv_agg ON p.parcel_id = pv_agg.parcel_id
+            WHERE pv.parcel_id = p.parcel_id
+              AND $3::uuid IS NOT NULL AND v.public_id = $3::uuid
+        ) pv_agg ON TRUE
 
         WHERE pg.feature_id = $1 AND NOT p.is_voided
         LIMIT 1
