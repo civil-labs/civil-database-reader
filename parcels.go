@@ -710,7 +710,7 @@ func (s *APIServer) fetchParcelsForComps(
 	// SQL Query construction: filters either strictly by selected public IDs or geographically by ST_Intersects
 	var filterCond string
 	if len(candidateIDs) > 0 {
-		filterCond = "($1::uuid[] IS NOT NULL AND p.public_id = ANY($1::uuid[]))"
+		filterCond = "($1::uuid[] IS NOT NULL AND p.public_id = ANY($1::uuid[]) AND ($2::text IS NULL OR TRUE))"
 	} else {
 		filterCond = "($1::uuid[] IS NULL AND $2::text IS NOT NULL AND ST_Intersects(pg.geom_web, ST_GeomFromText($2, 4326)))"
 	}
