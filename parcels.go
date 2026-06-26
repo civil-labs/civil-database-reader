@@ -1353,9 +1353,9 @@ func (s *APIServer) GetParcelIdsByFeatureId(
 	req *connect.Request[parcelsv1.GetParcelIdsByFeatureIdRequest],
 ) (*connect.Response[parcelsv1.GetParcelIdsByFeatureIdResponse], error) {
 
-	s.logger.Debug("received GetParcelIdsByFeatureId request", slog.Any("featureIds", req.Msg.FeatureId))
+	s.logger.Debug("received GetParcelIdsByFeatureId request", slog.Any("featureIds", req.Msg.FeatureIds))
 
-	featureIDs := req.Msg.FeatureId
+	featureIDs := req.Msg.FeatureIds
 	if len(featureIDs) == 0 {
 		return connect.NewResponse(&parcelsv1.GetParcelIdsByFeatureIdResponse{
 			ParcelIds: make(map[int64]string),
