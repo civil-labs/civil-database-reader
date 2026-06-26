@@ -1233,7 +1233,9 @@ func (s *APIServer) GetParcelByFeatureId(
               AND $3::uuid IS NOT NULL AND v.public_id = $3::uuid
         ) pv_agg ON TRUE
 
-        WHERE pg.feature_id = $1 AND NOT p.is_voided
+        WHERE pg.feature_id = $1 
+          AND pg.legal_valid_range @> NOW()
+          AND NOT p.is_voided
         LIMIT 1
     `
 
