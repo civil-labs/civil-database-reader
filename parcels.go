@@ -518,6 +518,7 @@ type CompParcelInfo struct {
 	ImprovementTypeIDs  []string
 	SaleTime            *time.Time
 	SalePrice           *string
+	FeatureID           int64
 }
 
 // fetchParcelsForComps retrieves candidate parcels and their metadata attributes.
@@ -542,6 +543,7 @@ func (s *APIServer) fetchParcelsForComps(
 		"pa.land_area_sq_m",
 		"pa.frontage_m",
 		"pa.depth_m",
+		"COALESCE(pg.feature_id, 0)",
 	}
 
 	// Baseline joins required for the default parcel attributes
@@ -549,11 +551,7 @@ func (s *APIServer) fetchParcelsForComps(
 		"LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id",
 		"LEFT JOIN addresses a ON pa.address_id = a.address_id",
 		"LEFT JOIN address_attributes aa ON a.address_id = aa.address_id",
-	}
-
-	// If filtering geographically, join on parcel_geometry to enable ST_Intersects
-	if wktPolygon != nil {
-		joins = append(joins, "LEFT JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id")
+		"LEFT JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id",
 	}
 
 	// Variables where scanned column data is stored
@@ -579,6 +577,7 @@ func (s *APIServer) fetchParcelsForComps(
 		newestEffectiveYearBuilt *int32
 		saleTime                 *time.Time
 		salePrice                *string
+		featureID                int64
 	)
 
 	// Baseline pointers matching the order of selectFields
@@ -589,6 +588,7 @@ func (s *APIServer) fetchParcelsForComps(
 		&landAreaSqM,
 		&frontageM,
 		&depthM,
+		&featureID,
 	}
 
 	var joinedImprovements, joinedZoning, joinedLandUse bool
@@ -827,6 +827,7 @@ func (s *APIServer) fetchParcelsForComps(
 			ImprovementTypeIDs:  improvementTypeIDs,
 			SaleTime:            saleTime,
 			SalePrice:           salePrice,
+			FeatureID:           featureID,
 		}
 	}
 
@@ -1018,6 +1019,7 @@ func (s *APIServer) GetEquityComparables(
 		if matched {
 			resParcels[id] = &parcelsv1.EquityComparableParcel{
 				ParcelId:         cand.ParcelID,
+				FeatureId:        cand.FeatureID,
 				AddressId:        cand.AddressID,
 				FormattedAddress: cand.FormattedAddress,
 				Attributes:       attrs,
@@ -1128,6 +1130,7 @@ func (s *APIServer) GetSalesComparables(
 		if matched {
 			resParcels[id] = &parcelsv1.SaleComparableParcel{
 				ParcelId:         cand.ParcelID,
+				FeatureId:        cand.FeatureID,
 				AddressId:        cand.AddressID,
 				FormattedAddress: cand.FormattedAddress,
 				SaleTime:         timestamppb.New(*cand.SaleTime),
