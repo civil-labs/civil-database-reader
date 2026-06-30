@@ -1399,3 +1399,49 @@ func (s *APIServer) GetParcelIdsByFeatureId(
 		ParcelIds: parcelIDsMap,
 	}), nil
 }
+
+func (s *APIServer) GetEstimatedParcelsExtentWGS84(
+	ctx context.Context,
+	req *connect.Request[parcelsv1.GetEstimatedParcelsExtentWGS84Request],
+) (*connect.Response[parcelsv1.GetEstimatedParcelsExtentWGS84Response], error) {
+
+	s.logger.Debug("received GetEstimatedParcelsExtentWGS84 request")
+
+	var minX, minY, maxX, maxY float64
+	query := `
+		SELECT 
+			COALESCE(ST_XMin(ext), 0.0), 
+			COALESCE(ST_YMin(ext), 0.0), 
+			COALESCE(ST_XMax(ext), 0.0), 
+			COALESCE(ST_YMax(ext), 0.0) 
+		FROM (
+			SELECT ST_EstimatedExtent('parcel_geometry', 'geom_web') AS ext
+		) AS sub
+	`
+	err := s.db.QueryRow(ctx, query).Scan(&minX, &minY, &maxX, &maxY)
+	if err != nil {
+		s.logger.Warn("ST_EstimatedExtent failed, falling back to ST_Extent", slog.Any("error", err))
+		fallbackQuery := `
+			SELECT 
+				COALESCE(ST_XMin(ST_Extent(geom_web)), 0.0), 
+				COALESCE(ST_YMin(ST_Extent(geom_web)), 0.0), 
+				COALESCE(ST_XMax(ST_Extent(geom_web)), 0.0), 
+				COALESCE(ST_YMax(ST_Extent(geom_web)), 0.0) 
+			FROM parcel_geometry
+		`
+		err = s.db.QueryRow(ctx, fallbackQuery).Scan(&minX, &minY, &maxX, &maxY)
+		if err != nil {
+			s.logger.Error("fallback ST_Extent query failed", slog.Any("error", err))
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve estimated parcels extent"))
+		}
+	}
+
+	res := &parcelsv1.GetEstimatedParcelsExtentWGS84Response{
+		MinX: minX,
+		MinY: minY,
+		MaxX: maxX,
+		MaxY: maxY,
+	}
+
+	return connect.NewResponse(res), nil
+}
