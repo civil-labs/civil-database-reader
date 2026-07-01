@@ -12,188 +12,277 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *APIServer) GetParcelsById(
+func (s *APIServer) GetParcelsWithImprovementSummaryByParcelId(
 	ctx context.Context,
-	req *connect.Request[parcelsv1.GetParcelsByIdRequest],
-) (*connect.Response[parcelsv1.GetParcelsByIdResponse], error) {
+	req *connect.Request[parcelsv1.GetParcelsWithImprovementSummaryByParcelIdRequest],
+) (*connect.Response[parcelsv1.GetParcelsWithImprovementSummaryByParcelIdResponse], error) {
 
-	s.logger.Debug("received GetParcelsById request", slog.Any("parcelIds", req.Msg.ParcelIds),
-		slog.Any("neighborhoodDefinitionId", req.Msg.NeighborhoodDefinitionId),
-		slog.Any("valuationId", req.Msg.ValuationId))
+	s.logger.Debug("received GetParcelsWithImprovementSummaryByParcelId request",
+		slog.Any("parcel_ids", req.Msg.ParcelIds),
+		slog.Any("legal_as_of", req.Msg.GetLegalAsOf()),
+		slog.String("valuation_id", req.Msg.GetValuationId()),
+		slog.String("neighborhood_definition_id", req.Msg.GetNeighborhoodDefinitionId()),
+	)
 
-	parcelIds := req.Msg.ParcelIds
+	parcels, err := s.getParcelsWithImprovementSummary(
+		ctx,
+		req.Msg.ParcelIds,
+		nil,
+		req.Msg.GetLegalAsOf(),
+		req.Msg.GetValuationId(),
+		req.Msg.GetNeighborhoodDefinitionId(),
+	)
+	if err != nil {
+		return nil, err
+	}
 
-	var neighborhoodDefIDArg *string
+	return connect.NewResponse(&parcelsv1.GetParcelsWithImprovementSummaryByParcelIdResponse{
+		Parcels: parcels,
+	}), nil
+}
 
-	// If the string is NOT empty, we take its memory address (&)
-	// to create a pointer to the string.
-	if defID := req.Msg.GetNeighborhoodDefinitionId(); defID != "" {
-		neighborhoodDefIDArg = &defID
+func (s *APIServer) GetParcelsWithImprovementSummaryByFeatureId(
+	ctx context.Context,
+	req *connect.Request[parcelsv1.GetParcelsWithImprovementSummaryByFeatureIdRequest],
+) (*connect.Response[parcelsv1.GetParcelsWithImprovementSummaryByFeatureIdResponse], error) {
+
+	s.logger.Debug("received GetParcelsWithImprovementSummaryByParcelId request",
+		slog.Any("feature_ids", req.Msg.FeatureIds),
+		slog.Any("legal_as_of", req.Msg.GetLegalAsOf()),
+		slog.String("valuation_id", req.Msg.GetValuationId()),
+		slog.String("neighborhood_definition_id", req.Msg.GetNeighborhoodDefinitionId()),
+	)
+
+	parcels, err := s.getParcelsWithImprovementSummary(
+		ctx,
+		nil,
+		req.Msg.FeatureIds,
+		req.Msg.GetLegalAsOf(),
+		req.Msg.GetValuationId(),
+		req.Msg.GetNeighborhoodDefinitionId(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return connect.NewResponse(&parcelsv1.GetParcelsWithImprovementSummaryByFeatureIdResponse{
+		Parcels: parcels,
+	}), nil
+}
+
+func (s *APIServer) getParcelsWithImprovementSummary(
+	ctx context.Context,
+	parcelUUIDs []string,
+	featureIDs []int64,
+	legalAsOf *timestamppb.Timestamp,
+	valuationId string,
+	neighborhoodDefinitionId string,
+) (map[string]*parcelsv1.ParcelWithImprovementSummary, error) {
+
+	s.logger.Debug("getParcelsWithImprovementSummary called",
+		slog.Int("parcelUUIDsCount", len(parcelUUIDs)),
+		slog.Int("featureIDsCount", len(featureIDs)),
+		slog.String("valuationId", valuationId),
+		slog.String("neighborhoodDefinitionId", neighborhoodDefinitionId),
+	)
+
+	var targetTime time.Time
+	if legalAsOf != nil {
+		targetTime = legalAsOf.AsTime()
+	} else {
+		targetTime = time.Now()
 	}
 
 	var valuationIDArg *string
-	if valID := req.Msg.GetValuationId(); valID != "" {
-		valuationIDArg = &valID
+	if valuationId != "" {
+		valuationIDArg = &valuationId
 	}
 
-	// Empty arrays are blocked by the connect handler via the proto def
+	var neighborhoodDefIDArg *string
+	if neighborhoodDefinitionId != "" {
+		neighborhoodDefIDArg = &neighborhoodDefinitionId
+	}
 
-	s.logger.Debug("creating GetParcelsById map")
+	var filterClause string
+	var idsArg any
+	if len(parcelUUIDs) > 0 {
+		filterClause = "p.public_id = ANY($4::uuid[])"
+		idsArg = parcelUUIDs
+	} else if len(featureIDs) > 0 {
+		filterClause = "pg.feature_id = ANY($4::bigint[])"
+		idsArg = featureIDs
+	} else {
+		return make(map[string]*parcelsv1.ParcelWithImprovementSummary), nil
+	}
 
-	parcels := make(map[string]*parcelsv1.Parcel, len(parcelIds))
+	query := fmt.Sprintf(`
+		WITH matched_parcels AS (
+			SELECT p.parcel_id, p.public_id, pg.feature_id
+			FROM public.parcels p
+			JOIN public.parcel_geometry pg ON p.parcel_id = pg.parcel_id AND pg.legal_valid_range @> $1::timestamptz
+			JOIN public.parcel_attributes pa ON p.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+			WHERE %s
+		),
+		primary_imps AS (
+			SELECT * FROM public.get_primary_improvements(ARRAY(SELECT parcel_id FROM matched_parcels))
+		),
+		imp_totals AS (
+			SELECT 
+				pi.parcel_id,
+				array_remove(array_agg(DISTINCT imp.public_id::text), NULL) AS improvement_ids,
+				COALESCE(SUM(attr.area_sq_m), 0) AS total_area_sq_m,
+				COALESCE(SUM(attr.bathrooms), 0) AS total_bathrooms,
+				COALESCE(SUM(attr.bedrooms), 0) AS total_bedrooms,
+				COALESCE(SUM(attr.units), 0) AS total_units,
+				SUM(val.market_value)::numeric(19,4)::text AS total_market_improvement_value,
+				SUM(val.assessed_value)::numeric(19,4)::text AS total_assessed_improvement_value
+			FROM public.parcel_improvements pi
+			JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+			LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id 
+				AND attr.legal_valid_range @> $1::timestamptz
+			LEFT JOIN public.improvement_valuations val ON imp.improvement_id = val.improvement_id
+				AND $2::uuid IS NOT NULL
+				AND val.valuation_id = (
+					SELECT v.valuation_id 
+					FROM public.valuations v 
+					WHERE v.public_id = $2::uuid
+				)
+			WHERE pi.parcel_id = ANY(ARRAY(SELECT parcel_id FROM matched_parcels))
+				AND pi.legal_valid_range @> $1::timestamptz
+				AND imp.is_voided = false
+			GROUP BY pi.parcel_id
+		),
+		primary_imp_details AS (
+			SELECT 
+				pimp.parcel_id,
+				pimp.improvement_id,
+				imp.public_id::text AS primary_improvement_public_id,
+				attr.year_built AS primary_year_built,
+				cond.public_id::text AS primary_condition_id
+			FROM primary_imps pimp
+			JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+			LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id 
+				AND attr.legal_valid_range @> $1::timestamptz
+			LEFT JOIN public.improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id 
+				AND cond.is_voided = false
+			WHERE imp.is_voided = false
+		)
+		SELECT 
+			p.public_id::text,
+			LEFT(aa.formatted_address, 1024) AS safe_address,
+			a.public_id::text,
+			LEFT(parties_agg.primary_owner_name, 128) AS safe_primary_owner_name,
+			LEFT(parties_agg.primary_owner_address, 256) AS safe_primary_owner_address,
+			parties_agg.party_ids,
+			pa.land_area_sq_m,
+			pa.frontage_m,
+			pa.depth_m,
+			lu.public_id::text,
+			n.public_id::text,
 
-	s.logger.Debug("building GetParcelsById query")
-
-	// Use defensive truncation to match what is returned from unbounded text columns
-	// to the max value promised in the proto contract
-	query := `
-        SELECT 
-            p.public_id::text,
-            LEFT(aa.formatted_address, 1024) AS safe_address,
-            a.public_id::text,
-            LEFT(parties_agg.primary_owner_name, 128) AS safe_primary_owner_name,
-            LEFT(parties_agg.primary_owner_address, 256) AS safe_primary_owner_address,
-            parties_agg.party_ids,
-            pa.land_area_sq_m,
-            pa.frontage_m,
-            pa.depth_m,
-            lu.public_id::text,
-            n.public_id::text,
-
-            aff.zoning_public_ids,
-            aff.affordance_ids,
-            aff.strict_max_far,
-            aff.strict_min_lot_size_sq_m,
-            aff.strict_max_height_m,
+			aff.zoning_public_ids,
+			aff.affordance_ids,
+			aff.strict_max_far,
+			aff.strict_min_lot_size_sq_m,
+			aff.strict_max_height_m,
 			aff.strict_max_dwelling_units_per_hectare,
 			aff.strict_max_lot_coverage_pct,
 
 			pv_agg.market_land_value,
 			pv_agg.assessed_land_value,
 
-			imp_agg.improvement_ids,
-			COALESCE(imp_agg.total_area_sq_m, 0),
-			COALESCE(imp_agg.total_bathrooms, 0),
-			COALESCE(imp_agg.total_bedrooms, 0),
-			COALESCE(imp_agg.total_units, 0),
-			imp_agg.oldest_year_built,
-			imp_agg.newest_year_built,
-			imp_agg.weighted_average_depreciation_modifier,
-			imp_agg.worst_condition_id,
-			imp_agg.best_condition_id,
-			imp_agg.market_improvement_value,
-			imp_agg.assessed_improvement_value,
+			COALESCE(imp_totals.improvement_ids, '{}'::text[]) AS improvement_ids,
+			COALESCE(pid.primary_improvement_public_id, '') AS primary_improvement_id,
+			COALESCE(imp_totals.total_area_sq_m, 0.0) AS total_area_sq_m,
+			COALESCE(imp_totals.total_bathrooms, 0) AS total_bathrooms,
+			COALESCE(imp_totals.total_bedrooms, 0) AS total_bedrooms,
+			COALESCE(imp_totals.total_units, 0) AS total_units,
+			pid.primary_year_built,
+			pid.primary_condition_id,
+			imp_totals.total_market_improvement_value,
+			imp_totals.total_assessed_improvement_value,
 
-            pa.properties::text,
-            COALESCE(pg.feature_id, 0)
-        FROM parcels p
-        LEFT JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id
-        LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
-        LEFT JOIN addresses a ON pa.address_id = a.address_id
-        LEFT JOIN address_attributes aa ON a.address_id = aa.address_id
-        LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
+			pa.properties::text,
+			COALESCE(pg.feature_id, 0)
+		FROM matched_parcels mp
+		JOIN public.parcels p ON mp.parcel_id = p.parcel_id
+		JOIN public.parcel_geometry pg ON p.parcel_id = pg.parcel_id AND pg.legal_valid_range @> $1::timestamptz
+		JOIN public.parcel_attributes pa ON p.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		LEFT JOIN public.addresses a ON pa.address_id = a.address_id
+		LEFT JOIN public.address_attributes aa ON a.address_id = aa.address_id
+		LEFT JOIN public.land_uses lu ON pa.land_use_id = lu.land_use_id
 
-        -- New Party / Fractional Ownership Aggregation
-        LEFT JOIN (
-            SELECT 
-                pp.parcel_id,
-                -- Aggregate all unique party IDs, ordered by who holds the largest share
-                array_agg(pty.public_id::text ORDER BY pp.ownership_share DESC, pty.party_id ASC) AS party_ids,
-                -- Grab the name and address of the party with the highest ownership share to act as the "Primary"
-                (array_agg(pa_attr.name ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_name,
-                (array_agg(p_aa.formatted_address ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_address
-            FROM parcel_parties pp
-            JOIN parties pty ON pp.party_id = pty.party_id
-            LEFT JOIN party_attributes pa_attr ON pty.party_id = pa_attr.party_id
-            LEFT JOIN address_attributes p_aa ON pa_attr.address_id = p_aa.address_id
-            GROUP BY pp.parcel_id
-        ) parties_agg ON p.parcel_id = parties_agg.parcel_id
+		LEFT JOIN (
+			SELECT 
+				pp.parcel_id,
+				array_agg(pty.public_id::text ORDER BY pp.ownership_share DESC, pty.party_id ASC) AS party_ids,
+				(array_agg(pa_attr.name ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_name,
+				(array_agg(p_aa.formatted_address ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_address
+			FROM public.parcel_parties pp
+			JOIN public.parties pty ON pp.party_id = pty.party_id
+			LEFT JOIN public.party_attributes pa_attr ON pty.party_id = pa_attr.party_id
+			LEFT JOIN public.address_attributes p_aa ON pa_attr.address_id = p_aa.address_id
+			WHERE pp.parcel_id = ANY(ARRAY(SELECT parcel_id FROM matched_parcels))
+				AND pp.legal_valid_range @> $1::timestamptz
+			GROUP BY pp.parcel_id
+		) parties_agg ON p.parcel_id = parties_agg.parcel_id
 
-        -- Neighborhood Definition Joins
-        LEFT JOIN neighborhood_definitions nd 
-            ON nd.public_id = $2::uuid
-        LEFT JOIN parcel_neighborhood_definitions pnd 
-            ON p.parcel_id = pnd.parcel_id 
-            AND pnd.neighborhood_definition_id = nd.neighborhood_definition_id
-        LEFT JOIN neighborhoods n 
-            ON pnd.neighborhood_id = n.neighborhood_id
+		-- Neighborhood Definition Joins
+		LEFT JOIN public.neighborhood_definitions nd 
+			ON nd.public_id = $3::uuid
+		LEFT JOIN public.parcel_neighborhood_definitions pnd 
+			ON p.parcel_id = pnd.parcel_id 
+			AND pnd.neighborhood_definition_id = nd.neighborhood_definition_id
+			AND pnd.legal_valid_range @> $1::timestamptz
+		LEFT JOIN public.neighborhoods n 
+			ON pnd.neighborhood_id = n.neighborhood_id
 
-        -- Aggregated Affordances Subquery
-        LEFT JOIN (
-            SELECT 
-                parcel_id,
-                array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_public_ids,
-                array_remove(array_agg(DISTINCT pa.public_id::text), NULL) AS affordance_ids,
-                MIN(max_far) AS strict_max_far,
-                MAX(min_lot_size_sq_m) AS strict_min_lot_size_sq_m,
-                MIN(max_height_m) AS strict_max_height_m,
+		-- Aggregated Affordances Subquery
+		LEFT JOIN (
+			SELECT 
+				pa.parcel_id,
+				array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_public_ids,
+				array_remove(array_agg(DISTINCT pa.public_id::text), NULL) AS affordance_ids,
+				MIN(max_far) AS strict_max_far,
+				MAX(min_lot_size_sq_m) AS strict_min_lot_size_sq_m,
+				MIN(max_height_m) AS strict_max_height_m,
 				MIN(max_dwelling_units_per_hectare) AS strict_max_dwelling_units_per_hectare,
 				MIN(max_lot_coverage_pct) AS strict_max_lot_coverage_pct
-            FROM parcel_affordances pa
-			LEFT JOIN zoning z ON pa.zoning_id = z.zoning_id
-            GROUP BY parcel_id
-        ) aff ON p.parcel_id = aff.parcel_id
+			FROM public.parcel_affordances pa
+			LEFT JOIN public.zoning z ON pa.zoning_id = z.zoning_id
+			WHERE pa.parcel_id = ANY(ARRAY(SELECT parcel_id FROM matched_parcels))
+				AND pa.legal_valid_range @> $1::timestamptz
+			GROUP BY pa.parcel_id
+		) aff ON p.parcel_id = aff.parcel_id
 
-        -- Aggregated Parcel Valuations Subquery
-        LEFT JOIN (
-            SELECT 
-                pv.parcel_id,
-                pv.market_value::numeric(19,4)::text AS market_land_value,
-                pv.assessed_value::numeric(19,4)::text AS assessed_land_value
-            FROM parcel_valuations pv
-            JOIN valuations v ON pv.valuation_id = v.valuation_id
-            WHERE $3::uuid IS NOT NULL AND v.public_id = $3::uuid
-        ) pv_agg ON p.parcel_id = pv_agg.parcel_id
+		-- Aggregated Parcel Valuations Subquery
+		LEFT JOIN (
+			SELECT 
+				pv.parcel_id,
+				pv.market_value::numeric(19,4)::text AS market_land_value,
+				pv.assessed_value::numeric(19,4)::text AS assessed_land_value
+			FROM public.parcel_valuations pv
+			JOIN public.valuations v ON pv.valuation_id = v.valuation_id
+			WHERE $2::uuid IS NOT NULL 
+				AND v.public_id = $2::uuid
+				AND pv.legal_valid_range @> $1::timestamptz
+		) pv_agg ON p.parcel_id = pv_agg.parcel_id
 
-        -- Aggregated Improvements Summary Subquery
-        LEFT JOIN (
-            SELECT 
-                pi.parcel_id,
-                array_remove(array_agg(DISTINCT imp.public_id::text), NULL) AS improvement_ids,
-                COALESCE(SUM(attr.area_sq_m), 0) AS total_area_sq_m,
-                COALESCE(SUM(attr.bathrooms), 0) AS total_bathrooms,
-                COALESCE(SUM(attr.bedrooms), 0) AS total_bedrooms,
-                COALESCE(SUM(attr.units), 0) AS total_units,
-                MIN(attr.year_built) AS oldest_year_built,
-                MAX(attr.year_built) AS newest_year_built,
-                (SUM(COALESCE(attr.area_sq_m, 1) * cond_attr.depreciation_modifier) / NULLIF(SUM(COALESCE(attr.area_sq_m, 1)), 0))::numeric(5,4)::text AS weighted_average_depreciation_modifier,
-                (array_agg(cond.public_id::text ORDER BY cond_attr.depreciation_modifier ASC, cond.improvement_condition_id ASC))[1] AS worst_condition_id,
-                (array_agg(cond.public_id::text ORDER BY cond_attr.depreciation_modifier DESC, cond.improvement_condition_id ASC))[1] AS best_condition_id,
-                SUM(val.market_value)::numeric(19,4)::text AS market_improvement_value,
-                SUM(val.assessed_value)::numeric(19,4)::text AS assessed_improvement_value
-            FROM parcel_improvements pi
-            JOIN improvements imp ON pi.improvement_id = imp.improvement_id
-            LEFT JOIN improvement_attributes attr ON imp.improvement_id = attr.improvement_id
-            LEFT JOIN improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id AND NOT cond.is_voided
-            LEFT JOIN improvement_condition_attributes cond_attr ON cond.improvement_condition_id = cond_attr.improvement_condition_id
-            LEFT JOIN improvement_valuations val ON imp.improvement_id = val.improvement_id
-                AND $3::uuid IS NOT NULL
-                AND val.valuation_id = (
-                    SELECT v.valuation_id 
-                    FROM valuations v 
-                    WHERE v.public_id = $3::uuid
-                )
-            WHERE NOT imp.is_voided
-            GROUP BY pi.parcel_id
-        ) imp_agg ON p.parcel_id = imp_agg.parcel_id
+		-- Improvements Joins
+		LEFT JOIN imp_totals ON p.parcel_id = imp_totals.parcel_id
+		LEFT JOIN primary_imp_details pid ON p.parcel_id = pid.parcel_id
+	`, filterClause)
 
-        WHERE p.public_id = ANY($1::uuid[])
-    `
-
-	rows, err := s.db.Query(ctx, query, parcelIds, neighborhoodDefIDArg, valuationIDArg)
-
-	s.logger.Debug("performed GetParcelsById query")
-
+	rows, err := s.db.Query(ctx, query, targetTime, valuationIDArg, neighborhoodDefIDArg, idsArg)
 	if err != nil {
-		s.logger.Error("failed to query parcels", slog.Any("error", err))
+		s.logger.Error("failed to query parcels with improvement summary", slog.Any("error", err))
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve parcel data"))
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		s.logger.Debug("scanning row")
+	parcels := make(map[string]*parcelsv1.ParcelWithImprovementSummary)
 
-		// 1. Declare pointers for optional fields
+	for rows.Next() {
 		var (
 			parcelID            string
 			address             *string
@@ -219,15 +308,13 @@ func (s *APIServer) GetParcelsById(
 			assessedLandValue *string
 
 			improvementIDs   []string
+			primaryImpID     string
 			totalAreaSqM     float64
 			totalBathrooms   int32
 			totalBedrooms    int32
 			totalUnits       int32
-			oldestYearBuilt  *int32
-			newestYearBuilt  *int32
-			weightedDeprMod  *string
-			worstConditionID *string
-			bestConditionID  *string
+			primaryYearBuilt *int32
+			primaryCondID    *string
 			marketImpValue   *string
 			assessedImpValue *string
 
@@ -235,7 +322,6 @@ func (s *APIServer) GetParcelsById(
 			featureID  int64
 		)
 
-		// 2. Scan directly into the pointers
 		err := rows.Scan(
 			&parcelID,
 			&address,
@@ -261,127 +347,82 @@ func (s *APIServer) GetParcelsById(
 			&assessedLandValue,
 
 			&improvementIDs,
+			&primaryImpID,
 			&totalAreaSqM,
 			&totalBathrooms,
 			&totalBedrooms,
 			&totalUnits,
-			&oldestYearBuilt,
-			&newestYearBuilt,
-			&weightedDeprMod,
-			&worstConditionID,
-			&bestConditionID,
+			&primaryYearBuilt,
+			&primaryCondID,
 			&marketImpValue,
 			&assessedImpValue,
 
 			&properties,
 			&featureID,
 		)
-
-		s.logger.Debug("scanned row", slog.Any("parcelId", parcelID))
-
 		if err != nil {
-			s.logger.Error("failed to scan parcel row", "error", err, "parcelId", parcelID)
+			s.logger.Error("failed to scan parcel row", slog.Any("error", err))
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("data unmarshaling error"))
 		}
 
-		// 3. Metric to Imperial Conversions (safely handling nils)
-		var landAreaSqFt, frontageFt, depthFt, minLotSizeSqFt, maxHeightFt, maxDwellingUnitsPerAcre *float64
-
+		var landAreaSqFt, frontageFt, depthFt *float64
 		if landAreaSqM != nil {
-			// 1 sq meter = 10.7639 sq feet
 			val := *landAreaSqM * 10.7639
 			landAreaSqFt = &val
 		}
-
 		if frontageM != nil {
-			// 1 meter = 3.28084 feet
 			val := *frontageM * 3.28084
 			frontageFt = &val
 		}
-
 		if depthM != nil {
 			val := *depthM * 3.28084
 			depthFt = &val
 		}
 
-		if minLotSizeSqM != nil {
-			val := *minLotSizeSqM * 10.7639
-			minLotSizeSqFt = &val
-		}
-
-		if maxHeightM != nil {
-			val := *maxHeightM * 3.28084
-			maxHeightFt = &val
-		}
-
-		if maxDwellingUnitsPerHect != nil {
-			val := *maxDwellingUnitsPerHect * 0.404686
-			maxDwellingUnitsPerAcre = &val
-		}
-
 		totalAreaSqFt := totalAreaSqM * 10.7639
 
-		s.logger.Debug("converted units")
-
-		// If nothing was found, initialize empty slices
 		if zoningIDs == nil {
 			zoningIDs = []string{}
 		}
-		if affordanceIDs == nil {
-			affordanceIDs = []string{}
+		if partyIDs == nil {
+			partyIDs = []string{}
 		}
 		if improvementIDs == nil {
 			improvementIDs = []string{}
 		}
 
-		affordances := &parcelsv1.ParcelAffordances{
-			AffordanceIds:           affordanceIDs,
-			MaxFar:                  maxFar,
-			MinLotSizeSqFt:          minLotSizeSqFt,
-			MaxHeightFt:             maxHeightFt,
-			MaxDwellingUnitsPerAcre: maxDwellingUnitsPerAcre,
-			MaxLotCoveragePct:       maxLotCoveragePct,
+		parcels[parcelID] = &parcelsv1.ParcelWithImprovementSummary{
+			ParcelDetails: &parcelsv1.ParcelDetails{
+				ParcelId:            parcelID,
+				FeatureId:           &featureID,
+				FormattedAddress:    address,
+				AddressId:           addressID,
+				PrimaryOwnerName:    primaryOwnerName,
+				PrimaryOwnerAddress: primaryOwnerAddress,
+				PartyIds:            partyIDs,
+				LandUseId:           landUseID,
+				NeighborhoodId:      neighborhoodID,
+				LandAreaSqFt:        landAreaSqFt,
+				FrontageFt:          frontageFt,
+				DepthFt:             depthFt,
+				ZoningIds:           zoningIDs,
+				MarketLandValue:     marketLandValue,
+				AssessedLandValue:   assessedLandValue,
+				Properties:          properties,
+			},
+			ImprovementSummary: &parcelsv1.ParcelImprovementsSummary{
+				ImprovementIds:                improvementIDs,
+				PrimaryImprovementId:          primaryImpID,
+				TotalAreaSqFt:                 totalAreaSqFt,
+				TotalBathrooms:                totalBathrooms,
+				TotalBedrooms:                 totalBedrooms,
+				TotalUnits:                    totalUnits,
+				PrimaryYearBuilt:              primaryYearBuilt,
+				PrimaryConditionId:            primaryCondID,
+				TotalMarketImprovementValue:   marketImpValue,
+				TotalAssessedImprovementValue: assessedImpValue,
+			},
 		}
-
-		improvementSummary := &parcelsv1.ParcelImprovementsSummary{
-			ImprovementIds:                      improvementIDs,
-			TotalAreaSqFt:                       totalAreaSqFt,
-			TotalBathrooms:                      totalBathrooms,
-			TotalBedrooms:                       totalBedrooms,
-			TotalUnits:                          totalUnits,
-			OldestYearBuilt:                     oldestYearBuilt,
-			NewestYearBuilt:                     newestYearBuilt,
-			WeightedAverageDepreciationModifier: weightedDeprMod,
-			WorstConditionId:                    worstConditionID,
-			BestConditionId:                     bestConditionID,
-			MarketImprovementValue:              marketImpValue,
-			AssessedImprovementValue:            assessedImpValue,
-		}
-
-		// 4. Populate the Protobuf map
-		// Assuming your proto generates pointers (*string, *float64) for optional fields
-		parcels[parcelID] = &parcelsv1.Parcel{
-			ParcelId:            parcelID,
-			FeatureId:           featureID,
-			FormattedAddress:    address,
-			AddressId:           addressID,
-			PrimaryOwnerName:    primaryOwnerName,
-			PrimaryOwnerAddress: primaryOwnerAddress,
-			PartyIds:            partyIDs,
-			LandUseId:           landUseID,
-			NeighborhoodId:      neighborhoodID,
-			LandAreaSqFt:        landAreaSqFt,
-			FrontageFt:          frontageFt,
-			DepthFt:             depthFt,
-			ZoningIds:           zoningIDs,
-			MarketLandValue:     marketLandValue,
-			AssessedLandValue:   assessedLandValue,
-			Affordances:         affordances,
-			ImprovementSummary:  improvementSummary,
-			Properties:          properties,
-		}
-
-		s.logger.Debug("populated protobuf map")
 	}
 
 	if err := rows.Err(); err != nil {
@@ -389,16 +430,7 @@ func (s *APIServer) GetParcelsById(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to process parcel stream"))
 	}
 
-	s.logger.Debug("constructing response")
-
-	// Wrap the map in your response payload
-	res := &parcelsv1.GetParcelsByIdResponse{
-		Parcels: parcels,
-	}
-
-	s.logger.Debug("sending response")
-
-	return connect.NewResponse(res), nil
+	return parcels, nil
 }
 
 func (s *APIServer) UpdateParcel(
@@ -1142,212 +1174,6 @@ func (s *APIServer) GetSalesComparables(
 
 	return connect.NewResponse(&parcelsv1.GetSalesComparablesResponse{
 		Parcels: resParcels,
-	}), nil
-}
-
-func (s *APIServer) GetParcelByFeatureId(
-	ctx context.Context,
-	req *connect.Request[parcelsv1.GetParcelByFeatureIdRequest],
-) (*connect.Response[parcelsv1.GetParcelByFeatureIdResponse], error) {
-
-	s.logger.Debug("received GetParcelByFeatureId request", slog.Int64("featureId", req.Msg.FeatureId),
-		slog.Any("neighborhoodDefinitionId", req.Msg.NeighborhoodDefinitionId),
-		slog.Any("valuationId", req.Msg.ValuationId))
-
-	var neighborhoodDefIDArg *string
-	if defID := req.Msg.GetNeighborhoodDefinitionId(); defID != "" {
-		neighborhoodDefIDArg = &defID
-	}
-
-	var valuationIDArg *string
-	if valID := req.Msg.GetValuationId(); valID != "" {
-		valuationIDArg = &valID
-	}
-
-	query := `
-        SELECT 
-            p.public_id::text,
-            LEFT(aa.formatted_address, 1024) AS safe_address,
-            a.public_id::text,
-            LEFT(parties_agg.primary_owner_name, 128) AS safe_primary_owner_name,
-            LEFT(parties_agg.primary_owner_address, 256) AS safe_primary_owner_address,
-            parties_agg.party_ids,
-            pa.land_area_sq_m,
-            pa.frontage_m,
-            pa.depth_m,
-            lu.public_id::text,
-            n.public_id::text,
-
-            aff.zoning_public_ids,
-
-			pv_agg.market_land_value,
-			pv_agg.assessed_land_value,
-
-            pa.properties::text,
-            pg.feature_id
-        FROM parcels p
-        JOIN parcel_geometry pg ON p.parcel_id = pg.parcel_id
-        LEFT JOIN parcel_attributes pa ON p.parcel_id = pa.parcel_id 
-        LEFT JOIN addresses a ON pa.address_id = a.address_id
-        LEFT JOIN address_attributes aa ON a.address_id = aa.address_id
-        LEFT JOIN land_uses lu ON pa.land_use_id = lu.land_use_id
-
-        -- New Party / Fractional Ownership Aggregation
-        LEFT JOIN LATERAL (
-            SELECT 
-                -- Aggregate all unique party IDs, ordered by who holds the largest share
-                array_agg(pty.public_id::text ORDER BY pp.ownership_share DESC, pty.party_id ASC) AS party_ids,
-                -- Grab the name and address of the party with the highest ownership share to act as the "Primary"
-                (array_agg(pa_attr.name ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_name,
-                (array_agg(p_aa.formatted_address ORDER BY pp.ownership_share DESC, pty.party_id ASC))[1] AS primary_owner_address
-            FROM parcel_parties pp
-            JOIN parties pty ON pp.party_id = pty.party_id
-            LEFT JOIN party_attributes pa_attr ON pty.party_id = pa_attr.party_id
-            LEFT JOIN address_attributes p_aa ON pa_attr.address_id = p_aa.address_id
-            WHERE pp.parcel_id = p.parcel_id
-        ) parties_agg ON TRUE
-
-        -- Neighborhood Definition Joins
-        LEFT JOIN neighborhood_definitions nd 
-            ON nd.public_id = $2::uuid
-        LEFT JOIN parcel_neighborhood_definitions pnd 
-            ON p.parcel_id = pnd.parcel_id 
-            AND pnd.neighborhood_definition_id = nd.neighborhood_definition_id
-        LEFT JOIN neighborhoods n 
-            ON pnd.neighborhood_id = n.neighborhood_id
-
-        -- Aggregated Affordances Subquery
-        LEFT JOIN LATERAL (
-            SELECT 
-                array_remove(array_agg(DISTINCT z.public_id::text), NULL) AS zoning_public_ids
-            FROM parcel_affordances pa
-			LEFT JOIN zoning z ON pa.zoning_id = z.zoning_id
-            WHERE pa.parcel_id = p.parcel_id
-        ) aff ON TRUE
-
-        -- Aggregated Parcel Valuations Subquery
-        LEFT JOIN LATERAL (
-            SELECT 
-                pv.market_value::numeric(19,4)::text AS market_land_value,
-                pv.assessed_value::numeric(19,4)::text AS assessed_land_value
-            FROM parcel_valuations pv
-            JOIN valuations v ON pv.valuation_id = v.valuation_id
-            WHERE pv.parcel_id = p.parcel_id
-              AND $3::uuid IS NOT NULL AND v.public_id = $3::uuid
-        ) pv_agg ON TRUE
-
-        WHERE pg.feature_id = $1 
-          AND pg.legal_valid_range @> NOW()
-          AND NOT p.is_voided
-        LIMIT 1
-    `
-
-	rows, err := s.db.Query(ctx, query, req.Msg.FeatureId, neighborhoodDefIDArg, valuationIDArg)
-	if err != nil {
-		s.logger.Error("failed to query parcel by feature ID", slog.Any("error", err))
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to retrieve parcel data"))
-	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("parcel not found for feature ID %d", req.Msg.FeatureId))
-	}
-
-	var (
-		parcelID            string
-		address             *string
-		addressID           *string
-		primaryOwnerName    *string
-		primaryOwnerAddress *string
-		partyIDs            []string
-		landAreaSqM         *float64
-		frontageM           *float64
-		depthM              *float64
-		landUseID           *string
-		neighborhoodID      *string
-
-		zoningIDs         []string
-		marketLandValue   *string
-		assessedLandValue *string
-
-		properties *string
-		featureID  int64
-	)
-
-	err = rows.Scan(
-		&parcelID,
-		&address,
-		&addressID,
-		&primaryOwnerName,
-		&primaryOwnerAddress,
-		&partyIDs,
-		&landAreaSqM,
-		&frontageM,
-		&depthM,
-		&landUseID,
-		&neighborhoodID,
-
-		&zoningIDs,
-
-		&marketLandValue,
-		&assessedLandValue,
-
-		&properties,
-		&featureID,
-	)
-
-	if err != nil {
-		s.logger.Error("failed to scan parcel row by feature ID", "error", err, "featureId", req.Msg.FeatureId)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("data unmarshaling error"))
-	}
-
-	var landAreaSqFt, frontageFt, depthFt *float64
-
-	if landAreaSqM != nil {
-		val := *landAreaSqM * 10.7639
-		landAreaSqFt = &val
-	}
-
-	if frontageM != nil {
-		val := *frontageM * 3.28084
-		frontageFt = &val
-	}
-
-	if depthM != nil {
-		val := *depthM * 3.28084
-		depthFt = &val
-	}
-
-	if zoningIDs == nil {
-		zoningIDs = []string{}
-	}
-
-	parcel := &parcelsv1.SimpleParcel{
-		ParcelId:            parcelID,
-		FeatureId:           featureID,
-		FormattedAddress:    address,
-		AddressId:           addressID,
-		PrimaryOwnerName:    primaryOwnerName,
-		PrimaryOwnerAddress: primaryOwnerAddress,
-		PartyIds:            partyIDs,
-		LandUseId:           landUseID,
-		NeighborhoodId:      neighborhoodID,
-		LandAreaSqFt:        landAreaSqFt,
-		FrontageFt:          frontageFt,
-		DepthFt:             depthFt,
-		ZoningIds:           zoningIDs,
-		MarketLandValue:     marketLandValue,
-		AssessedLandValue:   assessedLandValue,
-		Properties:          properties,
-	}
-
-	if err := rows.Err(); err != nil {
-		s.logger.Error("error iterating parcel row by feature ID", slog.Any("error", err))
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to process parcel data"))
-	}
-
-	return connect.NewResponse(&parcelsv1.GetParcelByFeatureIdResponse{
-		Parcel: parcel,
 	}), nil
 }
 
