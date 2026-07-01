@@ -124,7 +124,7 @@ func (s *APIServer) getParcelsWithImprovementSummary(
 			WHERE %s
 		),
 		primary_imps AS (
-			SELECT * FROM public.get_primary_improvements(ARRAY(SELECT parcel_id FROM matched_parcels))
+			SELECT * FROM public.get_primary_improvements(ARRAY(SELECT parcel_id FROM matched_parcels), $1::timestamptz)
 		),
 		imp_totals AS (
 			SELECT 
