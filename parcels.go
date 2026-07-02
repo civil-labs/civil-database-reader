@@ -158,6 +158,7 @@ func (s *APIServer) getParcelsWithImprovementSummary(
 				pimp.improvement_id,
 				imp.public_id::text AS primary_improvement_public_id,
 				attr.year_built AS primary_year_built,
+				attr.effective_year_built AS primary_effective_year_built,
 				cond.public_id::text AS primary_condition_id
 			FROM primary_imps pimp
 			JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
@@ -198,6 +199,7 @@ func (s *APIServer) getParcelsWithImprovementSummary(
 			COALESCE(imp_totals.total_bedrooms, 0) AS total_bedrooms,
 			COALESCE(imp_totals.total_units, 0) AS total_units,
 			pid.primary_year_built,
+			pid.primary_effective_year_built,
 			pid.primary_condition_id,
 			imp_totals.total_market_improvement_value,
 			imp_totals.total_assessed_improvement_value,
@@ -314,6 +316,7 @@ func (s *APIServer) getParcelsWithImprovementSummary(
 			totalBedrooms    int32
 			totalUnits       int32
 			primaryYearBuilt *int32
+			primaryEffectiveYearBuilt *int32
 			primaryCondID    *string
 			marketImpValue   *string
 			assessedImpValue *string
@@ -353,6 +356,7 @@ func (s *APIServer) getParcelsWithImprovementSummary(
 			&totalBedrooms,
 			&totalUnits,
 			&primaryYearBuilt,
+			&primaryEffectiveYearBuilt,
 			&primaryCondID,
 			&marketImpValue,
 			&assessedImpValue,
@@ -418,6 +422,7 @@ func (s *APIServer) getParcelsWithImprovementSummary(
 				TotalBedrooms:                 totalBedrooms,
 				TotalUnits:                    totalUnits,
 				PrimaryYearBuilt:              primaryYearBuilt,
+				PrimaryEffectiveYearBuilt:     primaryEffectiveYearBuilt,
 				PrimaryConditionId:            primaryCondID,
 				TotalMarketImprovementValue:   marketImpValue,
 				TotalAssessedImprovementValue: assessedImpValue,
