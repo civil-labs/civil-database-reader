@@ -5,8 +5,9 @@ go 1.26.1
 require (
 	connectrpc.com/connect v1.19.1
 	connectrpc.com/grpchealth v1.4.0
-	github.com/civil-labs/civil-api-go v0.0.0-20260701194236-c2603ccefe0a
+	github.com/civil-labs/civil-api-go v0.0.0-20260702133909-db70b61b3199
 	github.com/jackc/pgx/v5 v5.9.1
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -16,5 +17,4 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto v0.0.0-20260618152121-87f3d3e198d3 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )

@@ -19,6 +19,8 @@ import (
 	"github.com/civil-labs/civil-api-go/civil/mesh/landuses/v1/landusesv1connect"
 	"github.com/civil-labs/civil-api-go/civil/mesh/parcels/v1/parcelsv1connect"
 	"github.com/civil-labs/civil-api-go/civil/mesh/zoning/v1/zoningv1connect"
+	meshneighborhoodsv1connect "github.com/civil-labs/civil-api-go/civil/mesh/neighborhoods/v1/neighborhoodsv1connect"
+	meshvaluationsv1connect "github.com/civil-labs/civil-api-go/civil/mesh/valuations/v1/valuationsv1connect"
 )
 
 type APIServer struct {
@@ -84,6 +86,12 @@ func main() {
 
 	path4, handler4 := zoningv1connect.NewZoningServiceHandler(srv)
 	mux.Handle(path4, handler4)
+
+	path5, handler5 := meshvaluationsv1connect.NewValuationServiceHandler(srv)
+	mux.Handle(path5, handler5)
+
+	path6, handler6 := meshneighborhoodsv1connect.NewNeighborhoodServiceHandler(srv)
+	mux.Handle(path6, handler6)
 
 	// Pass the fully qualified name of the service so the health check
 	// can report on this specific service, as well as the global server status.
