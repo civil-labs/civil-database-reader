@@ -663,13 +663,13 @@ func (s *APIServer) fetchParcelsForComps(
 			}
 
 		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_AREA_SQ_FT,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR_BUILT,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_EFFECTIVE_YEAR_BUILT,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_YEAR_BUILT,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_EFFECTIVE_YEAR_BUILT,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BEDROOMS,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BATHROOMS,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_UNITS,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_CONDITION_ID,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_TYPE_ID:
 			// Join improvement attributes subquery to fetch size, rooms, conditions, and years built
 			if !joinedImprovements {
 				joins = append(joins, `
@@ -886,13 +886,13 @@ func getNumericalValue(p *CompParcelInfo, attr parcelsv1.ParcelAttribute) (*floa
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_AREA_SQ_FT:
 		val := p.ImprovementAreaSqFt
 		return &val, true
-	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_YEAR_BUILT:
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_YEAR_BUILT:
 		if p.YearBuilt == nil {
 			return nil, true
 		}
 		val := float64(*p.YearBuilt)
 		return &val, true
-	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_EFFECTIVE_YEAR_BUILT:
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_EFFECTIVE_YEAR_BUILT:
 		if p.EffectiveYearBuilt == nil {
 			return nil, true
 		}
@@ -928,10 +928,10 @@ func checkCategoricalMatch(cand *CompParcelInfo, attr parcelsv1.ParcelAttribute,
 	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_ZONING_ID:
 		return sliceOverlap(cand.ZoningIDs, tolerance)
 
-	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID:
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_CONDITION_ID:
 		return sliceOverlap(cand.ConditionIDs, tolerance)
 
-	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_TYPE_ID:
 		return sliceOverlap(cand.ImprovementTypeIDs, tolerance)
 	}
 	return false
@@ -958,13 +958,13 @@ func getCategoricalValueString(p *CompParcelInfo, attr parcelsv1.ParcelAttribute
 		}
 		val := strings.Join(p.ZoningIDs, ",")
 		return &val
-	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_CONDITION_ID:
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_CONDITION_ID:
 		if len(p.ConditionIDs) == 0 {
 			return nil
 		}
 		val := strings.Join(p.ConditionIDs, ",")
 		return &val
-	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_TYPE_ID:
+	case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_TYPE_ID:
 		if len(p.ImprovementTypeIDs) == 0 {
 			return nil
 		}
@@ -1275,4 +1275,910 @@ func (s *APIServer) GetEstimatedParcelsExtentWGS84(
 	}
 
 	return connect.NewResponse(res), nil
+}
+
+func getTargetTime(legalAsOf *timestamppb.Timestamp) time.Time {
+	if legalAsOf != nil {
+		return legalAsOf.AsTime()
+	}
+	return time.Now()
+}
+
+func (s *APIServer) GetLandAreaSqftByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetLandAreaSqftByParcelIdRequest]) (*connect.Response[parcelsv1.GetLandAreaSqftByParcelIdResponse], error) {
+	values, err := s.getLandAreaSqftByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetLandAreaSqftByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getLandAreaSqftByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]float64, error) {
+	values := make(map[string]float64)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, pa.land_area_sq_m
+		FROM public.parcels p
+		JOIN public.parcel_attributes pa ON p.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		WHERE p.public_id = ANY($2::uuid[])
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var areaSqM *float64
+		if err := rows.Scan(&pid, &areaSqM); err != nil { return nil, err }
+		if areaSqM != nil {
+			values[pid] = *areaSqM * 10.7639
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetFrontageFtByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetFrontageFtByParcelIdRequest]) (*connect.Response[parcelsv1.GetFrontageFtByParcelIdResponse], error) {
+	values, err := s.getFrontageFtByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetFrontageFtByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getFrontageFtByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]float64, error) {
+	values := make(map[string]float64)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, pa.frontage_m
+		FROM public.parcels p
+		JOIN public.parcel_attributes pa ON p.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		WHERE p.public_id = ANY($2::uuid[])
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var frontageM *float64
+		if err := rows.Scan(&pid, &frontageM); err != nil { return nil, err }
+		if frontageM != nil {
+			values[pid] = *frontageM * 3.28084
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetDepthFtByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetDepthFtByParcelIdRequest]) (*connect.Response[parcelsv1.GetDepthFtByParcelIdResponse], error) {
+	values, err := s.getDepthFtByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetDepthFtByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getDepthFtByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]float64, error) {
+	values := make(map[string]float64)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, pa.depth_m
+		FROM public.parcels p
+		JOIN public.parcel_attributes pa ON p.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		WHERE p.public_id = ANY($2::uuid[])
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var depthM *float64
+		if err := rows.Scan(&pid, &depthM); err != nil { return nil, err }
+		if depthM != nil {
+			values[pid] = *depthM * 3.28084
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetLandUseIdSqftByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdSqftByParcelIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdSqftByParcelIdResponse], error) {
+	values, err := s.getLandUseIdSqftByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetLandUseIdSqftByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getLandUseIdSqftByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]string, error) {
+	values := make(map[string]string)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, lu.public_id::text
+		FROM public.parcels p
+		JOIN public.parcel_attributes pa ON p.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		JOIN public.land_uses lu ON pa.land_use_id = lu.land_use_id
+		WHERE p.public_id = ANY($2::uuid[])
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var luId *string
+		if err := rows.Scan(&pid, &luId); err != nil { return nil, err }
+		if luId != nil {
+			values[pid] = *luId
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetZoningIdByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetZoningIdByParcelIdRequest]) (*connect.Response[parcelsv1.GetZoningIdByParcelIdResponse], error) {
+	values, err := s.getZoningIdByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetZoningIdByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getZoningIdByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]string, error) {
+	values := make(map[string]string)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, (array_remove(array_agg(DISTINCT z.public_id::text), NULL))[1]
+		FROM public.parcels p
+		JOIN public.parcel_affordances pa ON p.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		JOIN public.zoning z ON pa.zoning_id = z.zoning_id
+		WHERE p.public_id = ANY($2::uuid[])
+		GROUP BY p.public_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var zoningId *string
+		if err := rows.Scan(&pid, &zoningId); err != nil { return nil, err }
+		if zoningId != nil {
+			values[pid] = *zoningId
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetImprovementAreaSqftByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetImprovementAreaSqftByParcelIdRequest]) (*connect.Response[parcelsv1.GetImprovementAreaSqftByParcelIdResponse], error) {
+	values, err := s.getImprovementAreaSqftByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetImprovementAreaSqftByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getImprovementAreaSqftByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]float64, error) {
+	values := make(map[string]float64)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, COALESCE(SUM(attr.area_sq_m), 0.0)
+		FROM public.parcels p
+		JOIN public.parcel_improvements pi ON p.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE p.public_id = ANY($2::uuid[]) AND imp.is_voided = false
+		GROUP BY p.public_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var areaSqM float64
+		if err := rows.Scan(&pid, &areaSqM); err != nil { return nil, err }
+		values[pid] = areaSqM * 10.7639
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetBedroomsByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetBedroomsByParcelIdRequest]) (*connect.Response[parcelsv1.GetBedroomsByParcelIdResponse], error) {
+	values, err := s.getBedroomsByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetBedroomsByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getBedroomsByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]int32, error) {
+	values := make(map[string]int32)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, COALESCE(SUM(attr.bedrooms), 0)::int
+		FROM public.parcels p
+		JOIN public.parcel_improvements pi ON p.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE p.public_id = ANY($2::uuid[]) AND imp.is_voided = false
+		GROUP BY p.public_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var bedrooms int32
+		if err := rows.Scan(&pid, &bedrooms); err != nil { return nil, err }
+		values[pid] = bedrooms
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetBathroomsByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetBathroomsByParcelIdRequest]) (*connect.Response[parcelsv1.GetBathroomsByParcelIdResponse], error) {
+	values, err := s.getBathroomsByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetBathroomsByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getBathroomsByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]int32, error) {
+	values := make(map[string]int32)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, COALESCE(SUM(attr.bathrooms), 0)::int
+		FROM public.parcels p
+		JOIN public.parcel_improvements pi ON p.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE p.public_id = ANY($2::uuid[]) AND imp.is_voided = false
+		GROUP BY p.public_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var bathrooms int32
+		if err := rows.Scan(&pid, &bathrooms); err != nil { return nil, err }
+		values[pid] = bathrooms
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetUnitsByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetUnitsByParcelIdRequest]) (*connect.Response[parcelsv1.GetUnitsByParcelIdResponse], error) {
+	values, err := s.getUnitsByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetUnitsByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getUnitsByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]int32, error) {
+	values := make(map[string]int32)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, COALESCE(SUM(attr.units), 0)::int
+		FROM public.parcels p
+		JOIN public.parcel_improvements pi ON p.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE p.public_id = ANY($2::uuid[]) AND imp.is_voided = false
+		GROUP BY p.public_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var units int32
+		if err := rows.Scan(&pid, &units); err != nil { return nil, err }
+		values[pid] = units
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementYearBuiltByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementYearBuiltByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementYearBuiltByParcelIdResponse], error) {
+	values, err := s.getPrimaryImprovementYearBuiltByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementYearBuiltByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementYearBuiltByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]int32, error) {
+	values := make(map[string]int32)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, attr.year_built
+		FROM public.parcels p
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT p2.parcel_id FROM public.parcels p2 WHERE p2.public_id = ANY($2::uuid[])
+		), $1::timestamptz) pimp ON p.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE imp.is_voided = false
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var yearBuilt *int32
+		if err := rows.Scan(&pid, &yearBuilt); err != nil { return nil, err }
+		if yearBuilt != nil {
+			values[pid] = *yearBuilt
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementEffectiveYearBuiltByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByParcelIdResponse], error) {
+	values, err := s.getPrimaryImprovementEffectiveYearBuiltByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementEffectiveYearBuiltByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]int32, error) {
+	values := make(map[string]int32)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, attr.effective_year_built
+		FROM public.parcels p
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT p2.parcel_id FROM public.parcels p2 WHERE p2.public_id = ANY($2::uuid[])
+		), $1::timestamptz) pimp ON p.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE imp.is_voided = false
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var effYearBuilt *int32
+		if err := rows.Scan(&pid, &effYearBuilt); err != nil { return nil, err }
+		if effYearBuilt != nil {
+			values[pid] = *effYearBuilt
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementConditionIdByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementConditionIdByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementConditionIdByParcelIdResponse], error) {
+	values, err := s.getPrimaryImprovementConditionIdByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementConditionIdByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementConditionIdByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]string, error) {
+	values := make(map[string]string)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, cond.public_id::text
+		FROM public.parcels p
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT p2.parcel_id FROM public.parcels p2 WHERE p2.public_id = ANY($2::uuid[])
+		), $1::timestamptz) pimp ON p.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		LEFT JOIN public.improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id AND cond.is_voided = false
+		WHERE imp.is_voided = false
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var condId *string
+		if err := rows.Scan(&pid, &condId); err != nil { return nil, err }
+		if condId != nil {
+			values[pid] = *condId
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementTypeIdByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementTypeIdByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementTypeIdByParcelIdResponse], error) {
+	values, err := s.getPrimaryImprovementTypeIdByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementTypeIdByParcelIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementTypeIdByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]string, error) {
+	values := make(map[string]string)
+	if len(parcelIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT p.public_id::text, imptype.public_id::text
+		FROM public.parcels p
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT p2.parcel_id 
+			FROM public.parcels p2 
+			WHERE p2.public_id = ANY($2::uuid[])
+		), $1::timestamptz) pimp ON p.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id 
+			AND attr.legal_valid_range @> $1::timestamptz
+		LEFT JOIN public.improvement_types imptype ON attr.improvement_type_id = imptype.improvement_type_id
+		WHERE imp.is_voided = false
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, parcelIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var pid string
+		var typeId *string
+		if err := rows.Scan(&pid, &typeId); err != nil { return nil, err }
+		if typeId != nil {
+			values[pid] = *typeId
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetLandAreaSqftByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetLandAreaSqftByFeatureIdRequest]) (*connect.Response[parcelsv1.GetLandAreaSqftByFeatureIdResponse], error) {
+	values, err := s.getLandAreaSqftByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetLandAreaSqftByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getLandAreaSqftByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]float64, error) {
+	values := make(map[int64]float64)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, pa.land_area_sq_m
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_attributes pa ON pg.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var areaSqM *float64
+		if err := rows.Scan(&fid, &areaSqM); err != nil { return nil, err }
+		if areaSqM != nil {
+			values[fid] = *areaSqM * 10.7639
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetFrontageFtByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetFrontageFtByFeatureIdRequest]) (*connect.Response[parcelsv1.GetFrontageFtByFeatureIdResponse], error) {
+	values, err := s.getFrontageFtByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetFrontageFtByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getFrontageFtByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]float64, error) {
+	values := make(map[int64]float64)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, pa.frontage_m
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_attributes pa ON pg.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var frontageM *float64
+		if err := rows.Scan(&fid, &frontageM); err != nil { return nil, err }
+		if frontageM != nil {
+			values[fid] = *frontageM * 3.28084
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetDepthFtByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetDepthFtByFeatureIdRequest]) (*connect.Response[parcelsv1.GetDepthFtByFeatureIdResponse], error) {
+	values, err := s.getDepthFtByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetDepthFtByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getDepthFtByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]float64, error) {
+	values := make(map[int64]float64)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, pa.depth_m
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_attributes pa ON pg.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var depthM *float64
+		if err := rows.Scan(&fid, &depthM); err != nil { return nil, err }
+		if depthM != nil {
+			values[fid] = *depthM * 3.28084
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetLandUseIdSqftByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdSqftByFeatureIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdSqftByFeatureIdResponse], error) {
+	values, err := s.getLandUseIdSqftByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetLandUseIdSqftByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getLandUseIdSqftByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]string, error) {
+	values := make(map[int64]string)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, lu.public_id::text
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_attributes pa ON pg.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		JOIN public.land_uses lu ON pa.land_use_id = lu.land_use_id
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var luId *string
+		if err := rows.Scan(&fid, &luId); err != nil { return nil, err }
+		if luId != nil {
+			values[fid] = *luId
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetZoningIdByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetZoningIdByFeatureIdRequest]) (*connect.Response[parcelsv1.GetZoningIdByFeatureIdResponse], error) {
+	values, err := s.getZoningIdByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetZoningIdByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getZoningIdByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]string, error) {
+	values := make(map[int64]string)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, (array_remove(array_agg(DISTINCT z.public_id::text), NULL))[1]
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_affordances pa ON pg.parcel_id = pa.parcel_id AND pa.legal_valid_range @> $1::timestamptz
+		JOIN public.zoning z ON pa.zoning_id = z.zoning_id
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz
+		GROUP BY pg.feature_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var zoningId *string
+		if err := rows.Scan(&fid, &zoningId); err != nil { return nil, err }
+		if zoningId != nil {
+			values[fid] = *zoningId
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetImprovementAreaSqftByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetImprovementAreaSqftByFeatureIdRequest]) (*connect.Response[parcelsv1.GetImprovementAreaSqftByFeatureIdResponse], error) {
+	values, err := s.getImprovementAreaSqftByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetImprovementAreaSqftByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getImprovementAreaSqftByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]float64, error) {
+	values := make(map[int64]float64)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, COALESCE(SUM(attr.area_sq_m), 0.0)
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_improvements pi ON pg.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz AND imp.is_voided = false
+		GROUP BY pg.feature_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var areaSqM float64
+		if err := rows.Scan(&fid, &areaSqM); err != nil { return nil, err }
+		values[fid] = areaSqM * 10.7639
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetBedroomsByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetBedroomsByFeatureIdRequest]) (*connect.Response[parcelsv1.GetBedroomsByFeatureIdResponse], error) {
+	values, err := s.getBedroomsByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetBedroomsByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getBedroomsByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]int32, error) {
+	values := make(map[int64]int32)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, COALESCE(SUM(attr.bedrooms), 0)::int
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_improvements pi ON pg.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz AND imp.is_voided = false
+		GROUP BY pg.feature_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var bedrooms int32
+		if err := rows.Scan(&fid, &bedrooms); err != nil { return nil, err }
+		values[fid] = bedrooms
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetBathroomsByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetBathroomsByFeatureIdRequest]) (*connect.Response[parcelsv1.GetBathroomsByFeatureIdResponse], error) {
+	values, err := s.getBathroomsByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetBathroomsByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getBathroomsByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]int32, error) {
+	values := make(map[int64]int32)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, COALESCE(SUM(attr.bathrooms), 0)::int
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_improvements pi ON pg.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz AND imp.is_voided = false
+		GROUP BY pg.feature_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var bathrooms int32
+		if err := rows.Scan(&fid, &bathrooms); err != nil { return nil, err }
+		values[fid] = bathrooms
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetUnitsByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetUnitsByFeatureIdRequest]) (*connect.Response[parcelsv1.GetUnitsByFeatureIdResponse], error) {
+	values, err := s.getUnitsByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetUnitsByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getUnitsByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]int32, error) {
+	values := make(map[int64]int32)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, COALESCE(SUM(attr.units), 0)::int
+		FROM public.parcel_geometry pg
+		JOIN public.parcel_improvements pi ON pg.parcel_id = pi.parcel_id AND pi.legal_valid_range @> $1::timestamptz
+		JOIN public.improvements imp ON pi.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE pg.feature_id = ANY($2::bigint[]) AND pg.legal_valid_range @> $1::timestamptz AND imp.is_voided = false
+		GROUP BY pg.feature_id
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var units int32
+		if err := rows.Scan(&fid, &units); err != nil { return nil, err }
+		values[fid] = units
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementYearBuiltByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementYearBuiltByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementYearBuiltByFeatureIdResponse], error) {
+	values, err := s.getPrimaryImprovementYearBuiltByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementYearBuiltByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementYearBuiltByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]int32, error) {
+	values := make(map[int64]int32)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, attr.year_built
+		FROM public.parcel_geometry pg
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT pg2.parcel_id 
+			FROM public.parcel_geometry pg2 
+			WHERE pg2.feature_id = ANY($2::bigint[])
+				AND pg2.legal_valid_range @> $1::timestamptz
+		), $1::timestamptz) pimp ON pg.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE imp.is_voided = false AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var yearBuilt *int32
+		if err := rows.Scan(&fid, &yearBuilt); err != nil { return nil, err }
+		if yearBuilt != nil {
+			values[fid] = *yearBuilt
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementEffectiveYearBuiltByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByFeatureIdResponse], error) {
+	values, err := s.getPrimaryImprovementEffectiveYearBuiltByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementEffectiveYearBuiltByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]int32, error) {
+	values := make(map[int64]int32)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, attr.effective_year_built
+		FROM public.parcel_geometry pg
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT pg2.parcel_id 
+			FROM public.parcel_geometry pg2 
+			WHERE pg2.feature_id = ANY($2::bigint[])
+				AND pg2.legal_valid_range @> $1::timestamptz
+		), $1::timestamptz) pimp ON pg.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		WHERE imp.is_voided = false AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var effYearBuilt *int32
+		if err := rows.Scan(&fid, &effYearBuilt); err != nil { return nil, err }
+		if effYearBuilt != nil {
+			values[fid] = *effYearBuilt
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementConditionIdByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementConditionIdByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementConditionIdByFeatureIdResponse], error) {
+	values, err := s.getPrimaryImprovementConditionIdByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementConditionIdByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementConditionIdByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]string, error) {
+	values := make(map[int64]string)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, cond.public_id::text
+		FROM public.parcel_geometry pg
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT pg2.parcel_id 
+			FROM public.parcel_geometry pg2 
+			WHERE pg2.feature_id = ANY($2::bigint[])
+				AND pg2.legal_valid_range @> $1::timestamptz
+		), $1::timestamptz) pimp ON pg.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id AND attr.legal_valid_range @> $1::timestamptz
+		LEFT JOIN public.improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id AND cond.is_voided = false
+		WHERE imp.is_voided = false AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var condId *string
+		if err := rows.Scan(&fid, &condId); err != nil { return nil, err }
+		if condId != nil {
+			values[fid] = *condId
+		}
+	}
+	return values, nil
+}
+
+func (s *APIServer) GetPrimaryImprovementTypeIdByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementTypeIdByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementTypeIdByFeatureIdResponse], error) {
+	values, err := s.getPrimaryImprovementTypeIdByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+	if err != nil { return nil, err }
+	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementTypeIdByFeatureIdResponse{Values: values}), nil
+}
+
+func (s *APIServer) getPrimaryImprovementTypeIdByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]string, error) {
+	values := make(map[int64]string)
+	if len(featureIds) == 0 {
+		return values, nil
+	}
+	targetTime := getTargetTime(legalAsOf)
+	query := `
+		SELECT pg.feature_id, imptype.public_id::text
+		FROM public.parcels p
+		JOIN public.parcel_geometry pg ON p.parcel_id = pg.parcel_id AND pg.legal_valid_range @> $1::timestamptz
+		JOIN public.get_primary_improvements(ARRAY(
+			SELECT pg2.parcel_id 
+			FROM public.parcel_geometry pg2 
+			WHERE pg2.feature_id = ANY($2::bigint[])
+				AND pg2.legal_valid_range @> $1::timestamptz
+		), $1::timestamptz) pimp ON pg.parcel_id = pimp.parcel_id
+		JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+		LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id 
+			AND attr.legal_valid_range @> $1::timestamptz
+		LEFT JOIN public.improvement_types imptype ON attr.improvement_type_id = imptype.improvement_type_id
+		WHERE imp.is_voided = false AND pg.legal_valid_range @> $1::timestamptz
+	`
+	rows, err := s.db.Query(ctx, query, targetTime, featureIds)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		var typeId *string
+		if err := rows.Scan(&fid, &typeId); err != nil { return nil, err }
+		if typeId != nil {
+			values[fid] = *typeId
+		}
+	}
+	return values, nil
 }
