@@ -593,28 +593,25 @@ func (s *APIServer) fetchParcelsForComps(
 
 	// Variables where scanned column data is stored
 	var (
-		parcelID                 string
-		address                  *string
-		addressID                *string
-		landAreaSqM              *float64
-		frontageM                *float64
-		depthM                   *float64
-		landUseID                *string
-		zoningIDs                []string
-		improvementIDs           []string
-		improvementTypeIDs       []string
-		conditionIDs             []string
-		totalAreaSqM             float64
-		totalBathrooms           int32
-		totalBedrooms            int32
-		totalUnits               int32
-		oldestYearBuilt          *int32
-		newestYearBuilt          *int32
-		oldestEffectiveYearBuilt *int32
-		newestEffectiveYearBuilt *int32
-		saleTime                 *time.Time
-		salePrice                *string
-		featureID                int64
+		parcelID                  string
+		address                   *string
+		addressID                 *string
+		landAreaSqM               *float64
+		frontageM                 *float64
+		depthM                    *float64
+		landUseID                 *string
+		zoningIDs                 []string
+		totalAreaSqM              float64
+		totalBathrooms            int32
+		totalBedrooms             int32
+		totalUnits                int32
+		primaryYearBuilt          *int32
+		primaryEffectiveYearBuilt *int32
+		primaryConditionID        *string
+		primaryImprovementTypeID  *string
+		saleTime                  *time.Time
+		salePrice                 *string
+		featureID                 int64
 	)
 
 	// Baseline pointers matching the order of selectFields
@@ -628,7 +625,7 @@ func (s *APIServer) fetchParcelsForComps(
 		&featureID,
 	}
 
-	var joinedImprovements, joinedZoning, joinedLandUse bool
+	var joinedImprovements, joinedPrimaryImp, joinedZoning, joinedLandUse bool
 
 	// Dynamic Query Assembly based on the input criteria
 	for _, c := range criteria {
@@ -663,65 +660,75 @@ func (s *APIServer) fetchParcelsForComps(
 			}
 
 		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_IMPROVEMENT_AREA_SQ_FT,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_YEAR_BUILT,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_EFFECTIVE_YEAR_BUILT,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BEDROOMS,
 			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_BATHROOMS,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_UNITS,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_CONDITION_ID,
-			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_TYPE_ID:
-			// Join improvement attributes subquery to fetch size, rooms, conditions, and years built
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_UNITS:
+			// Join improvement attributes subquery to fetch size, rooms, and units
 			if !joinedImprovements {
 				joins = append(joins, `
                     LEFT JOIN (
                         SELECT 
                             pi.parcel_id,
-                            array_remove(array_agg(DISTINCT imp.public_id::text), NULL) AS improvement_ids,
-                            array_remove(array_agg(DISTINCT imptype.public_id::text), NULL) AS improvement_type_ids,
-                            array_remove(array_agg(DISTINCT cond.public_id::text), NULL) AS condition_ids,
                             COALESCE(SUM(attr.area_sq_m), 0) AS total_area_sq_m,
                             COALESCE(SUM(attr.bathrooms), 0) AS total_bathrooms,
                             COALESCE(SUM(attr.bedrooms), 0) AS total_bedrooms,
-                            COALESCE(SUM(attr.units), 0) AS total_units,
-                            MIN(attr.year_built) AS oldest_year_built,
-                            MAX(attr.year_built) AS newest_year_built,
-                            MIN(NULLIF(attr.properties->>'effective_year_built', '')::int) AS oldest_effective_year_built,
-                            MAX(NULLIF(attr.properties->>'effective_year_built', '')::int) AS newest_effective_year_built
+                            COALESCE(SUM(attr.units), 0) AS total_units
                         FROM parcel_improvements pi
                         JOIN improvements imp ON pi.improvement_id = imp.improvement_id
                         LEFT JOIN improvement_attributes attr ON imp.improvement_id = attr.improvement_id
-                        LEFT JOIN improvement_types imptype ON attr.improvement_type_id = imptype.improvement_type_id
-                        LEFT JOIN improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id AND NOT cond.is_voided
                         WHERE NOT imp.is_voided
                         GROUP BY pi.parcel_id
                     ) imp_agg ON p.parcel_id = imp_agg.parcel_id`)
 				selectFields = append(selectFields,
-					"imp_agg.improvement_ids",
-					"imp_agg.improvement_type_ids",
-					"imp_agg.condition_ids",
 					"COALESCE(imp_agg.total_area_sq_m, 0)",
 					"COALESCE(imp_agg.total_bathrooms, 0)",
 					"COALESCE(imp_agg.total_bedrooms, 0)",
 					"COALESCE(imp_agg.total_units, 0)",
-					"imp_agg.oldest_year_built",
-					"imp_agg.newest_year_built",
-					"imp_agg.oldest_effective_year_built",
-					"imp_agg.newest_effective_year_built",
 				)
 				scanDest = append(scanDest,
-					&improvementIDs,
-					&improvementTypeIDs,
-					&conditionIDs,
 					&totalAreaSqM,
 					&totalBathrooms,
 					&totalBedrooms,
 					&totalUnits,
-					&oldestYearBuilt,
-					&newestYearBuilt,
-					&oldestEffectiveYearBuilt,
-					&newestEffectiveYearBuilt,
 				)
 				joinedImprovements = true
+			}
+
+		case parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_YEAR_BUILT,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_EFFECTIVE_YEAR_BUILT,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_CONDITION_ID,
+			parcelsv1.ParcelAttribute_PARCEL_ATTRIBUTE_PRIMARY_IMPROVEMENT_TYPE_ID:
+			// Join primary improvement attributes subquery
+			if !joinedPrimaryImp {
+				joins = append(joins, `
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            attr.year_built AS primary_year_built,
+                            attr.effective_year_built AS primary_effective_year_built,
+                            cond.public_id::text AS primary_condition_id,
+                            imptype.public_id::text AS primary_improvement_type_id
+                        FROM public.get_primary_improvements(ARRAY[p.parcel_id], NOW()) pimp
+                        JOIN public.improvements imp ON pimp.improvement_id = imp.improvement_id
+                        LEFT JOIN public.improvement_attributes attr ON imp.improvement_id = attr.improvement_id 
+                            AND attr.legal_valid_range @> NOW()
+                        LEFT JOIN public.improvement_types imptype ON attr.improvement_type_id = imptype.improvement_type_id
+                        LEFT JOIN public.improvement_conditions cond ON attr.improvement_condition_id = cond.improvement_condition_id 
+                            AND cond.is_voided = false
+                        WHERE imp.is_voided = false
+                    ) prim_imp ON true`)
+				selectFields = append(selectFields,
+					"prim_imp.primary_year_built",
+					"prim_imp.primary_effective_year_built",
+					"prim_imp.primary_condition_id",
+					"prim_imp.primary_improvement_type_id",
+				)
+				scanDest = append(scanDest,
+					&primaryYearBuilt,
+					&primaryEffectiveYearBuilt,
+					&primaryConditionID,
+					&primaryImprovementTypeID,
+				)
+				joinedPrimaryImp = true
 			}
 		}
 	}
@@ -809,30 +816,33 @@ func (s *APIServer) fetchParcelsForComps(
 		// Convert total building/improvement area to square feet
 		totalAreaSqFt := totalAreaSqM * 10.7639
 
-		// Fallback rules for year built (use newest year built, fallback to oldest)
+		// Primary improvement fields map directly
 		var yearBuilt *int32
-		if newestYearBuilt != nil {
-			yearBuilt = newestYearBuilt
-		} else {
-			yearBuilt = oldestYearBuilt
+		if primaryYearBuilt != nil {
+			yearBuilt = primaryYearBuilt
 		}
 
-		// Fallback rules for effective year built (use newest, fallback to oldest)
 		var effectiveYearBuilt *int32
-		if newestEffectiveYearBuilt != nil {
-			effectiveYearBuilt = newestEffectiveYearBuilt
-		} else {
-			effectiveYearBuilt = oldestEffectiveYearBuilt
+		if primaryEffectiveYearBuilt != nil {
+			effectiveYearBuilt = primaryEffectiveYearBuilt
 		}
 
 		// Prevent nil slice issues by returning empty slices instead of null in JSON response
 		if zoningIDs == nil {
 			zoningIDs = []string{}
 		}
-		if conditionIDs == nil {
+
+		var conditionIDs []string
+		if primaryConditionID != nil && *primaryConditionID != "" {
+			conditionIDs = []string{*primaryConditionID}
+		} else {
 			conditionIDs = []string{}
 		}
-		if improvementTypeIDs == nil {
+
+		var improvementTypeIDs []string
+		if primaryImprovementTypeID != nil && *primaryImprovementTypeID != "" {
+			improvementTypeIDs = []string{*primaryImprovementTypeID}
+		} else {
 			improvementTypeIDs = []string{}
 		}
 
