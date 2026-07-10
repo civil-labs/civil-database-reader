@@ -1294,9 +1294,52 @@ func getTargetTime(legalAsOf *timestamppb.Timestamp) time.Time {
 	return time.Now()
 }
 
+func (s *APIServer) logParcelIds(method string, parcelIds []string) []string {
+	var sample []string
+	if len(parcelIds) > 5 {
+		sample = parcelIds[:5]
+	} else {
+		sample = parcelIds
+	}
+	s.logger.Debug(method+" request attributes",
+		slog.Int("count", len(parcelIds)),
+		slog.Any("sample_parcel_ids", sample),
+	)
+	return sample
+}
+
+func (s *APIServer) logFeatureIds(method string, featureIds []int64) []int64 {
+	var sample []int64
+	if len(featureIds) > 5 {
+		sample = featureIds[:5]
+	} else {
+		sample = featureIds
+	}
+	s.logger.Debug(method+" request attributes",
+		slog.Int("count", len(featureIds)),
+		slog.Any("sample_feature_ids", sample),
+	)
+	return sample
+}
+
+func logReturnedValues[K comparable, V any](logger *slog.Logger, method string, sample []K, values map[K]V) {
+	sampleMap := make(map[K]V)
+	for _, id := range sample {
+		if val, ok := values[id]; ok {
+			sampleMap[id] = val
+		}
+	}
+	logger.Debug(method+" response attributes",
+		slog.Int("returned_count", len(values)),
+		slog.Any("sample_values", sampleMap),
+	)
+}
+
 func (s *APIServer) GetLandAreaSqftByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetLandAreaSqftByParcelIdRequest]) (*connect.Response[parcelsv1.GetLandAreaSqftByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetLandAreaSqftByParcelId", req.Msg.ParcelIds)
 	values, err := s.getLandAreaSqftByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetLandAreaSqftByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetLandAreaSqftByParcelIdResponse{Values: values}), nil
 }
 
@@ -1327,8 +1370,10 @@ func (s *APIServer) getLandAreaSqftByParcelId(ctx context.Context, parcelIds []s
 }
 
 func (s *APIServer) GetFrontageFtByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetFrontageFtByParcelIdRequest]) (*connect.Response[parcelsv1.GetFrontageFtByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetFrontageFtByParcelId", req.Msg.ParcelIds)
 	values, err := s.getFrontageFtByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetFrontageFtByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetFrontageFtByParcelIdResponse{Values: values}), nil
 }
 
@@ -1359,8 +1404,10 @@ func (s *APIServer) getFrontageFtByParcelId(ctx context.Context, parcelIds []str
 }
 
 func (s *APIServer) GetDepthFtByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetDepthFtByParcelIdRequest]) (*connect.Response[parcelsv1.GetDepthFtByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetDepthFtByParcelId", req.Msg.ParcelIds)
 	values, err := s.getDepthFtByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetDepthFtByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetDepthFtByParcelIdResponse{Values: values}), nil
 }
 
@@ -1391,8 +1438,10 @@ func (s *APIServer) getDepthFtByParcelId(ctx context.Context, parcelIds []string
 }
 
 func (s *APIServer) GetLandUseIdSqftByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdSqftByParcelIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdSqftByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetLandUseIdSqftByParcelId", req.Msg.ParcelIds)
 	values, err := s.getLandUseIdSqftByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetLandUseIdSqftByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetLandUseIdSqftByParcelIdResponse{Values: values}), nil
 }
 
@@ -1424,8 +1473,10 @@ func (s *APIServer) getLandUseIdSqftByParcelId(ctx context.Context, parcelIds []
 }
 
 func (s *APIServer) GetZoningIdByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetZoningIdByParcelIdRequest]) (*connect.Response[parcelsv1.GetZoningIdByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetZoningIdByParcelId", req.Msg.ParcelIds)
 	values, err := s.getZoningIdByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetZoningIdByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetZoningIdByParcelIdResponse{Values: values}), nil
 }
 
@@ -1458,8 +1509,10 @@ func (s *APIServer) getZoningIdByParcelId(ctx context.Context, parcelIds []strin
 }
 
 func (s *APIServer) GetImprovementAreaSqftByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetImprovementAreaSqftByParcelIdRequest]) (*connect.Response[parcelsv1.GetImprovementAreaSqftByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetImprovementAreaSqftByParcelId", req.Msg.ParcelIds)
 	values, err := s.getImprovementAreaSqftByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetImprovementAreaSqftByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetImprovementAreaSqftByParcelIdResponse{Values: values}), nil
 }
 
@@ -1491,8 +1544,10 @@ func (s *APIServer) getImprovementAreaSqftByParcelId(ctx context.Context, parcel
 }
 
 func (s *APIServer) GetBedroomsByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetBedroomsByParcelIdRequest]) (*connect.Response[parcelsv1.GetBedroomsByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetBedroomsByParcelId", req.Msg.ParcelIds)
 	values, err := s.getBedroomsByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetBedroomsByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetBedroomsByParcelIdResponse{Values: values}), nil
 }
 
@@ -1524,8 +1579,10 @@ func (s *APIServer) getBedroomsByParcelId(ctx context.Context, parcelIds []strin
 }
 
 func (s *APIServer) GetBathroomsByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetBathroomsByParcelIdRequest]) (*connect.Response[parcelsv1.GetBathroomsByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetBathroomsByParcelId", req.Msg.ParcelIds)
 	values, err := s.getBathroomsByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetBathroomsByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetBathroomsByParcelIdResponse{Values: values}), nil
 }
 
@@ -1557,8 +1614,10 @@ func (s *APIServer) getBathroomsByParcelId(ctx context.Context, parcelIds []stri
 }
 
 func (s *APIServer) GetUnitsByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetUnitsByParcelIdRequest]) (*connect.Response[parcelsv1.GetUnitsByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetUnitsByParcelId", req.Msg.ParcelIds)
 	values, err := s.getUnitsByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetUnitsByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetUnitsByParcelIdResponse{Values: values}), nil
 }
 
@@ -1590,8 +1649,10 @@ func (s *APIServer) getUnitsByParcelId(ctx context.Context, parcelIds []string, 
 }
 
 func (s *APIServer) GetPrimaryImprovementYearBuiltByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementYearBuiltByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementYearBuiltByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetPrimaryImprovementYearBuiltByParcelId", req.Msg.ParcelIds)
 	values, err := s.getPrimaryImprovementYearBuiltByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementYearBuiltByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementYearBuiltByParcelIdResponse{Values: values}), nil
 }
 
@@ -1626,8 +1687,10 @@ func (s *APIServer) getPrimaryImprovementYearBuiltByParcelId(ctx context.Context
 }
 
 func (s *APIServer) GetPrimaryImprovementEffectiveYearBuiltByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetPrimaryImprovementEffectiveYearBuiltByParcelId", req.Msg.ParcelIds)
 	values, err := s.getPrimaryImprovementEffectiveYearBuiltByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementEffectiveYearBuiltByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByParcelIdResponse{Values: values}), nil
 }
 
@@ -1662,8 +1725,10 @@ func (s *APIServer) getPrimaryImprovementEffectiveYearBuiltByParcelId(ctx contex
 }
 
 func (s *APIServer) GetPrimaryImprovementConditionIdByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementConditionIdByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementConditionIdByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetPrimaryImprovementConditionIdByParcelId", req.Msg.ParcelIds)
 	values, err := s.getPrimaryImprovementConditionIdByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementConditionIdByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementConditionIdByParcelIdResponse{Values: values}), nil
 }
 
@@ -1699,8 +1764,10 @@ func (s *APIServer) getPrimaryImprovementConditionIdByParcelId(ctx context.Conte
 }
 
 func (s *APIServer) GetPrimaryImprovementTypeIdByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementTypeIdByParcelIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementTypeIdByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetPrimaryImprovementTypeIdByParcelId", req.Msg.ParcelIds)
 	values, err := s.getPrimaryImprovementTypeIdByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementTypeIdByParcelId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementTypeIdByParcelIdResponse{Values: values}), nil
 }
 
@@ -1738,9 +1805,13 @@ func (s *APIServer) getPrimaryImprovementTypeIdByParcelId(ctx context.Context, p
 	return values, nil
 }
 
+
+
 func (s *APIServer) GetLandAreaSqftByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetLandAreaSqftByFeatureIdRequest]) (*connect.Response[parcelsv1.GetLandAreaSqftByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetLandAreaSqftByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getLandAreaSqftByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetLandAreaSqftByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetLandAreaSqftByFeatureIdResponse{Values: values}), nil
 }
 
@@ -1771,8 +1842,10 @@ func (s *APIServer) getLandAreaSqftByFeatureId(ctx context.Context, featureIds [
 }
 
 func (s *APIServer) GetFrontageFtByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetFrontageFtByFeatureIdRequest]) (*connect.Response[parcelsv1.GetFrontageFtByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetFrontageFtByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getFrontageFtByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetFrontageFtByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetFrontageFtByFeatureIdResponse{Values: values}), nil
 }
 
@@ -1803,8 +1876,10 @@ func (s *APIServer) getFrontageFtByFeatureId(ctx context.Context, featureIds []i
 }
 
 func (s *APIServer) GetDepthFtByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetDepthFtByFeatureIdRequest]) (*connect.Response[parcelsv1.GetDepthFtByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetDepthFtByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getDepthFtByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetDepthFtByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetDepthFtByFeatureIdResponse{Values: values}), nil
 }
 
@@ -1835,8 +1910,10 @@ func (s *APIServer) getDepthFtByFeatureId(ctx context.Context, featureIds []int6
 }
 
 func (s *APIServer) GetLandUseIdSqftByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdSqftByFeatureIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdSqftByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetLandUseIdSqftByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getLandUseIdSqftByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetLandUseIdSqftByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetLandUseIdSqftByFeatureIdResponse{Values: values}), nil
 }
 
@@ -1868,8 +1945,10 @@ func (s *APIServer) getLandUseIdSqftByFeatureId(ctx context.Context, featureIds 
 }
 
 func (s *APIServer) GetZoningIdByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetZoningIdByFeatureIdRequest]) (*connect.Response[parcelsv1.GetZoningIdByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetZoningIdByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getZoningIdByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetZoningIdByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetZoningIdByFeatureIdResponse{Values: values}), nil
 }
 
@@ -1902,8 +1981,10 @@ func (s *APIServer) getZoningIdByFeatureId(ctx context.Context, featureIds []int
 }
 
 func (s *APIServer) GetImprovementAreaSqftByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetImprovementAreaSqftByFeatureIdRequest]) (*connect.Response[parcelsv1.GetImprovementAreaSqftByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetImprovementAreaSqftByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getImprovementAreaSqftByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetImprovementAreaSqftByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetImprovementAreaSqftByFeatureIdResponse{Values: values}), nil
 }
 
@@ -1935,8 +2016,10 @@ func (s *APIServer) getImprovementAreaSqftByFeatureId(ctx context.Context, featu
 }
 
 func (s *APIServer) GetBedroomsByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetBedroomsByFeatureIdRequest]) (*connect.Response[parcelsv1.GetBedroomsByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetBedroomsByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getBedroomsByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetBedroomsByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetBedroomsByFeatureIdResponse{Values: values}), nil
 }
 
@@ -1968,8 +2051,10 @@ func (s *APIServer) getBedroomsByFeatureId(ctx context.Context, featureIds []int
 }
 
 func (s *APIServer) GetBathroomsByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetBathroomsByFeatureIdRequest]) (*connect.Response[parcelsv1.GetBathroomsByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetBathroomsByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getBathroomsByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetBathroomsByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetBathroomsByFeatureIdResponse{Values: values}), nil
 }
 
@@ -2001,8 +2086,10 @@ func (s *APIServer) getBathroomsByFeatureId(ctx context.Context, featureIds []in
 }
 
 func (s *APIServer) GetUnitsByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetUnitsByFeatureIdRequest]) (*connect.Response[parcelsv1.GetUnitsByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetUnitsByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getUnitsByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetUnitsByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetUnitsByFeatureIdResponse{Values: values}), nil
 }
 
@@ -2034,8 +2121,10 @@ func (s *APIServer) getUnitsByFeatureId(ctx context.Context, featureIds []int64,
 }
 
 func (s *APIServer) GetPrimaryImprovementYearBuiltByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementYearBuiltByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementYearBuiltByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetPrimaryImprovementYearBuiltByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getPrimaryImprovementYearBuiltByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementYearBuiltByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementYearBuiltByFeatureIdResponse{Values: values}), nil
 }
 
@@ -2073,8 +2162,10 @@ func (s *APIServer) getPrimaryImprovementYearBuiltByFeatureId(ctx context.Contex
 }
 
 func (s *APIServer) GetPrimaryImprovementEffectiveYearBuiltByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetPrimaryImprovementEffectiveYearBuiltByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getPrimaryImprovementEffectiveYearBuiltByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementEffectiveYearBuiltByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementEffectiveYearBuiltByFeatureIdResponse{Values: values}), nil
 }
 
@@ -2112,8 +2203,10 @@ func (s *APIServer) getPrimaryImprovementEffectiveYearBuiltByFeatureId(ctx conte
 }
 
 func (s *APIServer) GetPrimaryImprovementConditionIdByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementConditionIdByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementConditionIdByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetPrimaryImprovementConditionIdByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getPrimaryImprovementConditionIdByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementConditionIdByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementConditionIdByFeatureIdResponse{Values: values}), nil
 }
 
@@ -2152,8 +2245,10 @@ func (s *APIServer) getPrimaryImprovementConditionIdByFeatureId(ctx context.Cont
 }
 
 func (s *APIServer) GetPrimaryImprovementTypeIdByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetPrimaryImprovementTypeIdByFeatureIdRequest]) (*connect.Response[parcelsv1.GetPrimaryImprovementTypeIdByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetPrimaryImprovementTypeIdByFeatureId", req.Msg.FeatureIds)
 	values, err := s.getPrimaryImprovementTypeIdByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
+	logReturnedValues(s.logger, "GetPrimaryImprovementTypeIdByFeatureId", sample, values)
 	return connect.NewResponse(&parcelsv1.GetPrimaryImprovementTypeIdByFeatureIdResponse{Values: values}), nil
 }
 
