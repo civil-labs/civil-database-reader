@@ -1437,15 +1437,15 @@ func (s *APIServer) getDepthFtByParcelId(ctx context.Context, parcelIds []string
 	return values, nil
 }
 
-func (s *APIServer) GetLandUseIdSqftByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdSqftByParcelIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdSqftByParcelIdResponse], error) {
-	sample := s.logParcelIds("GetLandUseIdSqftByParcelId", req.Msg.ParcelIds)
-	values, err := s.getLandUseIdSqftByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
+func (s *APIServer) GetLandUseIdByParcelId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdByParcelIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdByParcelIdResponse], error) {
+	sample := s.logParcelIds("GetLandUseIdByParcelId", req.Msg.ParcelIds)
+	values, err := s.getLandUseIdByParcelId(ctx, req.Msg.ParcelIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
-	logReturnedValues(s.logger, "GetLandUseIdSqftByParcelId", sample, values)
-	return connect.NewResponse(&parcelsv1.GetLandUseIdSqftByParcelIdResponse{Values: values}), nil
+	logReturnedValues(s.logger, "GetLandUseIdByParcelId", sample, values)
+	return connect.NewResponse(&parcelsv1.GetLandUseIdByParcelIdResponse{Values: values}), nil
 }
 
-func (s *APIServer) getLandUseIdSqftByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]string, error) {
+func (s *APIServer) getLandUseIdByParcelId(ctx context.Context, parcelIds []string, legalAsOf *timestamppb.Timestamp) (map[string]string, error) {
 	values := make(map[string]string)
 	if len(parcelIds) == 0 {
 		return values, nil
@@ -1909,15 +1909,15 @@ func (s *APIServer) getDepthFtByFeatureId(ctx context.Context, featureIds []int6
 	return values, nil
 }
 
-func (s *APIServer) GetLandUseIdSqftByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdSqftByFeatureIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdSqftByFeatureIdResponse], error) {
-	sample := s.logFeatureIds("GetLandUseIdSqftByFeatureId", req.Msg.FeatureIds)
-	values, err := s.getLandUseIdSqftByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
+func (s *APIServer) GetLandUseIdByFeatureId(ctx context.Context, req *connect.Request[parcelsv1.GetLandUseIdByFeatureIdRequest]) (*connect.Response[parcelsv1.GetLandUseIdByFeatureIdResponse], error) {
+	sample := s.logFeatureIds("GetLandUseIdByFeatureId", req.Msg.FeatureIds)
+	values, err := s.getLandUseIdByFeatureId(ctx, req.Msg.FeatureIds, req.Msg.GetLegalAsOf())
 	if err != nil { return nil, err }
-	logReturnedValues(s.logger, "GetLandUseIdSqftByFeatureId", sample, values)
-	return connect.NewResponse(&parcelsv1.GetLandUseIdSqftByFeatureIdResponse{Values: values}), nil
+	logReturnedValues(s.logger, "GetLandUseIdByFeatureId", sample, values)
+	return connect.NewResponse(&parcelsv1.GetLandUseIdByFeatureIdResponse{Values: values}), nil
 }
 
-func (s *APIServer) getLandUseIdSqftByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]string, error) {
+func (s *APIServer) getLandUseIdByFeatureId(ctx context.Context, featureIds []int64, legalAsOf *timestamppb.Timestamp) (map[int64]string, error) {
 	values := make(map[int64]string)
 	if len(featureIds) == 0 {
 		return values, nil

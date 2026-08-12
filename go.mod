@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	connectrpc.com/connect v1.19.1
 	connectrpc.com/grpchealth v1.4.0
-	github.com/civil-labs/civil-api-go v0.0.0-20260709115539-16af212ed470
+	github.com/civil-labs/civil-api-go v0.0.0-20260812161835-dd57510ff842
 	github.com/jackc/pgx/v5 v5.9.1
 	google.golang.org/protobuf v1.36.11
 )
